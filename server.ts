@@ -41,7 +41,7 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
     }
 
     const targetLanguage = req.body.language || 'ku';
-    const selectedModel = req.body.model || 'gemini'; // 'gemini', 'groq', 'scribe'
+    const selectedModel = req.body.model || 'gemini';
     
     let mimeType = req.file.mimetype.split(';')[0];
     if (mimeType === 'application/ogg') mimeType = 'audio/ogg';
@@ -83,64 +83,7 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
       } catch (e) {}
     }
 
-    // 1. GROQ PATH
-    if (selectedModel === 'groq' || selectedModel === 'groq-turbo') {
-      if (!process.env.GROQ_API_KEY) {
-         return res.status(500).json({ error: "GROQ_API_KEY is not configured" });
-      }
-      
-      const formData = new FormData();
-      const blob = new Blob([finalBuffer], { type: finalMimeType });
-      formData.append("file", blob, finalFileName);
-      
-      const whisperModel = selectedModel === 'groq-turbo' ? "whisper-large-v3-turbo" : "whisper-large-v3";
-      formData.append("model", whisperModel);
-      // Kurdish is not supported by Whisper — let it auto-detect
-
-      const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${process.env.GROQ_API_KEY}` },
-        body: formData
-      });
-      const groqData = await groqRes.json();
-
-      if (!groqRes.ok) throw new Error(groqData.error?.message || "Groq transcription failed");
-
-      const rawTranscript = groqData.text;
-
-      // Whisper often outputs Arabic or wrong script for Kurdish audio.
-      // Use Llama to fix/translate based on desired output language.
-      const systemPrompt = targetLanguage === 'ar'
-        ? "You are an expert translator. The following text was auto-transcribed from audio and may contain Kurdish written in Arabic script, or already be in Arabic. Translate or convert it into highly accurate, fluent, natural standard Arabic (Fusha). Return ONLY the pure raw Arabic text. No markdown, no HTML, no explanations."
-        : "You are an expert Kurdish language specialist. The following text was auto-transcribed from Kurdish audio by a speech recognition model that does not support Kurdish, so it may have errors, wrong words, or be written in Arabic instead of Kurdish. Correct it into proper Kurdish (Sorani, Arabic script). Fix spelling, grammar, and any mis-transcribed words. Return ONLY the corrected Kurdish text. No markdown, no HTML, no explanations.";
-
-      const chatRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "llama3-70b-8192",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: rawTranscript }
-          ]
-        })
-      });
-      const chatData = await chatRes.json();
-
-      let finalOutput = rawTranscript;
-      if (chatRes.ok && chatData.choices && chatData.choices.length > 0) {
-        finalOutput = chatData.choices[0].message.content.replace(/```[a-z]*\n?/g, '').replace(/```/g, '').replace(/<[^>]*>?/gm, '').trim();
-      }
-      
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.send(finalOutput);
-      return;
-    }
-
-    // 2. SCRIBE (ELEVENLABS) PATH
+    // 1. SCRIBE (ELEVENLABS) PATH
     if (selectedModel === 'scribe') {
       if (!process.env.ELEVENLABS_API_KEY) {
          return res.status(500).json({ error: "ELEVENLABS_API_KEY is not configured" });

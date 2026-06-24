@@ -26,7 +26,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [cookieError, setCookieError] = useState(false);
   const [targetLanguage, setTargetLanguage] = useState<'ku' | 'ar'>('ku');
-  const [selectedModel, setSelectedModel] = useState<'gemini' | 'groq' | 'groq-turbo' | 'scribe'>('groq');
+  const [selectedModel, setSelectedModel] = useState<'gemini' | 'scribe'>('gemini');
   const [shouldCompress, setShouldCompress] = useState(true);
   const [activeTab, setActiveTab] = useState<'transcribe' | 'library'>('transcribe');
   const [history, setHistory] = useState<HistoryItem[]>(() => {
@@ -319,9 +319,7 @@ export default function App() {
                         className="w-full bg-transparent text-sm font-medium text-white py-2 px-3 outline-none cursor-pointer appearance-none text-center"
                         dir="ltr"
                       >
-                        <option value="groq" className="bg-[#1a1a1c]">Groq Whisper v3 ★ (Kurdish)</option>
                         <option value="gemini" className="bg-[#1a1a1c]">Gemini 2.5 Flash</option>
-                        <option value="groq-turbo" className="bg-[#1a1a1c]">Groq Whisper Turbo</option>
                         <option value="scribe" className="bg-[#1a1a1c]">ElevenLabs Scribe</option>
                       </select>
                     </div>
