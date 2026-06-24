@@ -46,7 +46,13 @@ export default function App() {
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [isExportingSubtitles, setIsExportingSubtitles] = useState(false);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
+  const [rangeVolume, setRangeVolume] = useState(1);
+  const [showRangeEditor, setShowRangeEditor] = useState(false);
   const editableRef = useRef<HTMLTextAreaElement>(null);
+  const audioElRef = useRef<HTMLAudioElement>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -342,6 +348,116 @@ export default function App() {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioBlob(null); setAudioUrl(null); setTranscription(""); setError(null);
     setSummary(''); setShowSummary(false);
+    setAudioDuration(0); setRangeStart(''); setRangeEnd(''); setShowRangeEditor(false);
+  };
+
+  const parseMMSS = (val: string): number => {
+    const parts = val.trim().split(':');
+    if (parts.length === 2) return parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+    return parseFloat(val) || 0;
+  };
+
+  const fmtMMSS = (sec: number): string => {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  };
+
+  const transcribeRange = async () => {
+    if (!audioBlob) return;
+    const start = parseMMSS(rangeStart);
+    const end = parseMMSS(rangeEnd) || audioDuration;
+    if (start >= end) { setError("کاتی دەستپێکردن پێویستە کەمتر بێت لە کاتی کۆتایی."); return; }
+
+    setIsTranscribing(true);
+    setError(null);
+    setTranscription("");
+    setIsEditingTranscription(false);
+
+    try {
+      // Decode → slice → re-encode as WAV using WebAudio API
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioCtx = new AudioContext();
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+
+      const sampleRate = decoded.sampleRate;
+      const startSample = Math.floor(start * sampleRate);
+      const endSample = Math.min(Math.floor(end * sampleRate), decoded.length);
+      const frameCount = endSample - startSample;
+
+      const sliced = audioCtx.createBuffer(decoded.numberOfChannels, frameCount, sampleRate);
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+        const srcData = decoded.getChannelData(ch).subarray(startSample, endSample);
+        // Apply volume gain
+        const dst = sliced.getChannelData(ch);
+        for (let i = 0; i < srcData.length; i++) dst[i] = srcData[i] * rangeVolume;
+      }
+      audioCtx.close();
+
+      // Encode sliced AudioBuffer to WAV
+      const wavBlob = audioBufferToWavBlob(sliced);
+
+      // Send to transcribe API
+      const formData = new FormData();
+      formData.append("audio", wavBlob, "range.wav");
+      formData.append("language", targetLanguage);
+      formData.append("model", selectedModel);
+      formData.append("compress", "false"); // already small slice
+
+      const response = await fetch("/api/transcribe", { method: "POST", body: formData });
+      if (!response.ok) {
+        const txt = await response.text();
+        try { setError(JSON.parse(txt).error || "هەڵەیەک ڕوویدا."); }
+        catch { setError("هەڵەیەک ڕوویدا لە کاتی گۆڕینی دەنگەکە."); }
+        return;
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No reader");
+      const decoder = new TextDecoder();
+      let fullText = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (value) {
+          const chunk = decoder.decode(value, { stream: !done });
+          if (chunk) { fullText += chunk; setTranscription(p => p + chunk); }
+        }
+        if (done) break;
+      }
+      setIsTranscribing(false);
+      if (fullText.trim()) {
+        await saveToHistory({ text: fullText, language: targetLanguage, timestamp: Date.now(), model: selectedModel });
+      }
+    } catch (err: any) {
+      setError(err.message || "هەڵەیەک ڕوویدا لە کاتی ئیدیتکردنی دەنگ.");
+      setIsTranscribing(false);
+    }
+  };
+
+  // Encode AudioBuffer to WAV Blob (PCM 16-bit)
+  const audioBufferToWavBlob = (buffer: AudioBuffer): Blob => {
+    const numCh = buffer.numberOfChannels;
+    const numFrames = buffer.length;
+    const sampleRate = buffer.sampleRate;
+    const bytesPerSample = 2;
+    const dataSize = numFrames * numCh * bytesPerSample;
+    const ab = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(ab);
+    const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+    writeStr(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true);
+    writeStr(8, 'WAVE'); writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+    view.setUint16(22, numCh, true); view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numCh * bytesPerSample, true);
+    view.setUint16(32, numCh * bytesPerSample, true); view.setUint16(34, 16, true);
+    writeStr(36, 'data'); view.setUint32(40, dataSize, true);
+    let off = 44;
+    for (let i = 0; i < numFrames; i++) {
+      for (let ch = 0; ch < numCh; ch++) {
+        const s = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
+        view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true); off += 2;
+      }
+    }
+    return new Blob([ab], { type: 'audio/wav' });
   };
 
   // Loading state
@@ -519,9 +635,95 @@ export default function App() {
                       </div>
                       {audioUrl && (
                         <div className="bg-[#0a0a0b] rounded-xl border border-[#ffffff08] p-2.5">
-                          <audio controls src={audioUrl} className="w-full h-9 outline-none" style={{ colorScheme: 'dark' }} />
+                          <audio ref={audioElRef} controls src={audioUrl} className="w-full h-9 outline-none" style={{ colorScheme: 'dark' }}
+                            onLoadedMetadata={e => {
+                              const d = (e.target as HTMLAudioElement).duration;
+                              if (isFinite(d)) { setAudioDuration(d); setRangeEnd(fmtMMSS(d)); }
+                            }}
+                          />
                         </div>
                       )}
+
+                      {/* ── RANGE EDITOR ── */}
+                      <div className="rounded-xl border border-[#ffffff08] bg-[#0a0a0b] overflow-hidden">
+                        <button onClick={() => setShowRangeEditor(p => !p)}
+                          className="w-full flex items-center justify-between px-4 py-2.5 text-[10px] uppercase tracking-widest text-[#555] hover:text-[#aaa] transition-colors font-bold"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6]" />
+                            ئیدیتی بەشێکی دیاریکراو
+                          </span>
+                          <ChevronDown size={12} className={`transition-transform ${showRangeEditor ? 'rotate-180' : ''}`} />
+                        </button>
+                        <AnimatePresence>
+                          {showRangeEditor && (
+                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                              className="border-t border-[#ffffff08] overflow-hidden"
+                            >
+                              <div className="p-4 space-y-4">
+                                {/* Start / End inputs */}
+                                <div className="grid grid-cols-2 gap-3" dir="ltr">
+                                  <div className="flex flex-col gap-1.5">
+                                    <label className="text-[9px] uppercase tracking-widest text-[#444] font-bold">دەستپێک (MM:SS)</label>
+                                    <input type="text" value={rangeStart} onChange={e => setRangeStart(e.target.value)}
+                                      placeholder="00:00"
+                                      className="bg-[#141416] border border-[#ffffff10] rounded-lg px-3 py-2 text-sm font-mono text-white outline-none focus:border-[#3b82f6]/60 transition-colors placeholder-[#333]"
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1.5">
+                                    <label className="text-[9px] uppercase tracking-widest text-[#444] font-bold">
+                                      کۆتایی (MM:SS){audioDuration > 0 && <span className="text-[#333] ml-1">/ {fmtMMSS(audioDuration)}</span>}
+                                    </label>
+                                    <input type="text" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)}
+                                      placeholder={audioDuration > 0 ? fmtMMSS(audioDuration) : '00:00'}
+                                      className="bg-[#141416] border border-[#ffffff10] rounded-lg px-3 py-2 text-sm font-mono text-white outline-none focus:border-[#3b82f6]/60 transition-colors placeholder-[#333]"
+                                    />
+                                  </div>
+                                </div>
+
+                                {/* Quick-set current time button */}
+                                {audioElRef.current && (
+                                  <div className="flex gap-2" dir="ltr">
+                                    <button onClick={() => setRangeStart(fmtMMSS(audioElRef.current!.currentTime))}
+                                      className="flex-1 py-1.5 text-[10px] uppercase tracking-wider bg-[#141416] border border-[#ffffff08] rounded-lg text-[#555] hover:text-[#3b82f6] hover:border-[#3b82f6]/30 transition-colors"
+                                    >▶ Set Start</button>
+                                    <button onClick={() => setRangeEnd(fmtMMSS(audioElRef.current!.currentTime))}
+                                      className="flex-1 py-1.5 text-[10px] uppercase tracking-wider bg-[#141416] border border-[#ffffff08] rounded-lg text-[#555] hover:text-[#3b82f6] hover:border-[#3b82f6]/30 transition-colors"
+                                    >■ Set End</button>
+                                  </div>
+                                )}
+
+                                {/* Volume slider */}
+                                <div className="space-y-2" dir="ltr">
+                                  <div className="flex justify-between items-center">
+                                    <label className="text-[9px] uppercase tracking-widest text-[#444] font-bold">ڤۆڵیوم</label>
+                                    <span className="text-[10px] font-mono text-[#555]">{Math.round(rangeVolume * 100)}%</span>
+                                  </div>
+                                  <input type="range" min={0.1} max={3} step={0.05} value={rangeVolume}
+                                    onChange={e => setRangeVolume(parseFloat(e.target.value))}
+                                    className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                                    style={{ background: `linear-gradient(to right, #3b82f6 ${((rangeVolume - 0.1) / 2.9) * 100}%, #1f2937 0%)` }}
+                                  />
+                                  <div className="flex justify-between text-[9px] text-[#333]">
+                                    <span>10%</span><span>100%</span><span>300%</span>
+                                  </div>
+                                </div>
+
+                                {/* Transcribe range button */}
+                                <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
+                                  onClick={transcribeRange} disabled={isTranscribing || !rangeStart}
+                                  className="w-full py-3 rounded-xl bg-[#3b82f6] text-white font-bold text-xs tracking-[0.15em] uppercase shadow-[0_0_20px_rgba(59,130,246,0.2)] hover:bg-[#2563eb] hover:shadow-[0_0_30px_rgba(59,130,246,0.35)] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2.5"
+                                >
+                                  {isTranscribing
+                                    ? <><Loader2 className="animate-spin" size={14} />PROCESSING RANGE...</>
+                                    : <>TRANSCRIBE {rangeStart && rangeEnd ? `${rangeStart} → ${rangeEnd}` : 'SELECTED RANGE'}</>}
+                                </motion.button>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
                       <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
                         onClick={() => transcribeAudio()} disabled={isTranscribing}
                         className="w-full py-3.5 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.15em] uppercase shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5" dir="ltr"
