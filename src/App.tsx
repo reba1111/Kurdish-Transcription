@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Mic, Square, Upload, Copy, Check, Volume2, FileAudio, Loader2, Trash2, History, Clock } from "lucide-react";
+import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown } from "lucide-react";
 
 type HistoryItem = {
   id: string;
@@ -39,13 +39,14 @@ export default function App() {
           const lowerText = item.text.toLowerCase();
           return !lowerText.includes('<!doctype html>') && !lowerText.includes('cookie check');
         });
-      } catch {
-        return [];
-      }
+      } catch { return []; }
     }
     return [];
   });
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | 'all' | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   const confirmDelete = () => {
     if (deleteConfirmId === 'all') {
@@ -53,16 +54,13 @@ export default function App() {
       localStorage.removeItem('vox_history');
     } else if (deleteConfirmId) {
       setHistory(prev => {
-        const newHistory = prev.filter(h => h.id !== deleteConfirmId);
-        localStorage.setItem('vox_history', JSON.stringify(newHistory));
-        return newHistory;
+        const next = prev.filter(h => h.id !== deleteConfirmId);
+        localStorage.setItem('vox_history', JSON.stringify(next));
+        return next;
       });
     }
     setDeleteConfirmId(null);
   };
-  
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
 
   const startRecording = async () => {
     try {
@@ -71,24 +69,16 @@ export default function App() {
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       mediaRecorder.onstop = () => {
         const blob = new Blob(audioChunksRef.current, { type: "audio/wav" });
         setAudioBlob(blob);
         setAudioUrl(URL.createObjectURL(blob));
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach(t => t.stop());
       };
-
       mediaRecorder.start();
       setIsRecording(true);
-    } catch (err) {
-      console.error("Error accessing microphone:", err instanceof Error ? err.message : String(err));
+    } catch {
       setError("نەتوانرا مایکرۆفۆن بکرێتەوە. تکایە مۆڵەت بدە.");
     }
   };
@@ -100,330 +90,282 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      if (file.size > 100 * 1024 * 1024) {
-        setError("قەبارەی فایلەکە زۆر گەورەیە. تکایە فایلێکی کەمتر لە ١٠٠ مێگابایت هەڵبژێرە.");
-        return;
-      }
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-      setAudioBlob(file);
-      setAudioUrl(URL.createObjectURL(file));
-      setError(null);
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 100 * 1024 * 1024) {
+      setError("قەبارەی فایلەکە زۆر گەورەیە. تکایە فایلێکی کەمتر لە ١٠٠ مێگابایت هەڵبژێرە.");
+      return;
     }
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioBlob(file);
+    setAudioUrl(URL.createObjectURL(file));
+    setError(null);
   };
 
-  const transcribeAudio = async (overrideLanguage?: 'ku' | 'ar' | any) => {
+  const transcribeAudio = async (overrideLanguage?: 'ku' | 'ar') => {
     if (!audioBlob) return;
-
     let langToUse = targetLanguage;
-    if (typeof overrideLanguage === 'string' && (overrideLanguage === 'ku' || overrideLanguage === 'ar')) {
+    if (overrideLanguage === 'ku' || overrideLanguage === 'ar') {
       langToUse = overrideLanguage;
       setTargetLanguage(overrideLanguage);
     }
-
     setIsTranscribing(true);
     setError(null);
     setTranscription("");
-
     const formData = new FormData();
     formData.append("audio", audioBlob);
     formData.append("language", langToUse);
     formData.append("model", selectedModel);
     formData.append("compress", shouldCompress ? "true" : "false");
-
     try {
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        body: formData,
-      });
-
+      const response = await fetch("/api/transcribe", { method: "POST", body: formData });
       if (response.status === 404) {
-        setError("هەڵەی 404: ڕاژەکە (API) نەدۆزرایەوە. ئەگەر ئەپەکەت لەسەر Vercel بڵاوکردۆتەوە، دەبێت بزانیت کە باکەندی ئەپەکە (server.ts) لەسەر Vercel بە شێوەیەکی ئۆتۆماتیکی کار ناکات.");
-        setIsTranscribing(false);
+        setError("هەڵەی 404: API نەدۆزرایەوە.");
         return;
       }
-
       const contentType = response.headers.get("content-type");
-      if (response.status !== 404 && contentType && contentType.includes("text/html") && !response.ok) {
+      if (contentType?.includes("text/html") && !response.ok) {
         setCookieError(true);
-        setIsTranscribing(false);
         return;
       }
-
       if (!response.ok) {
-        const errorText = await response.text();
-        try {
-          const data = JSON.parse(errorText);
-          setError(data.error || "هەڵەیەک ڕوویدا لە کاتی گۆڕینی دەنگەکە.");
-        } catch {
-          setError("هەڵەیەک ڕوویدا لە کاتی گۆڕینی دەنگەکە.");
-        }
-        setIsTranscribing(false);
+        const txt = await response.text();
+        try { setError(JSON.parse(txt).error || "هەڵەیەک ڕوویدا."); }
+        catch { setError("هەڵەیەک ڕوویدا لە کاتی گۆڕینی دەنگەکە."); }
         return;
       }
-
       const reader = response.body?.getReader();
       if (!reader) throw new Error("No reader");
-
       const decoder = new TextDecoder();
-      let done = false;
-
       let fullText = "";
-      while (!done) {
-        const { value, done: doneReading } = await reader.read();
-        done = doneReading;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
         if (value) {
           const chunk = decoder.decode(value, { stream: true });
           fullText += chunk;
-          setTranscription((prev) => prev + chunk);
+          setTranscription(p => p + chunk);
         }
       }
-
       if (fullText.trim()) {
-        const newItem: HistoryItem = {
-          id: Date.now().toString(),
-          text: fullText,
-          language: langToUse,
-          timestamp: Date.now(),
-          model: selectedModel
-        };
+        const newItem: HistoryItem = { id: Date.now().toString(), text: fullText, language: langToUse, timestamp: Date.now(), model: selectedModel };
         setHistory(prev => {
           const updated = [newItem, ...prev].slice(0, 100);
           localStorage.setItem('vox_history', JSON.stringify(updated));
           return updated;
         });
       }
-    } catch (err) {
-      console.error("Transcription error:", err instanceof Error ? err.message : String(err));
+    } catch {
       setError("پەیوەندی لەگەڵ سێرڤەر نییە.");
     } finally {
       setIsTranscribing(false);
     }
   };
 
-  const fallbackCopyTextToClipboard = (text: string) => {
-    const textArea = document.createElement("textarea");
-    textArea.value = text;
-    textArea.style.top = "0";
-    textArea.style.left = "0";
-    textArea.style.position = "fixed";
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    try {
-      document.execCommand('copy');
-    } catch (err) {
-      console.error('Fallback: Oops, unable to copy', err instanceof Error ? err.message : String(err));
-    }
-    document.body.removeChild(textArea);
-  };
-
   const copyText = (text: string, id: string | null = null) => {
+    const write = () => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      Object.assign(ta.style, { position: "fixed", top: "0", left: "0" });
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+    };
     if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).catch(() => {
-        fallbackCopyTextToClipboard(text);
-      });
-    } else {
-      fallbackCopyTextToClipboard(text);
-    }
-    
-    if (id) {
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } else {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
-  const copyToClipboard = () => {
-    copyText(transcription);
+      navigator.clipboard.writeText(text).catch(write);
+    } else { write(); }
+    if (id) { setCopiedId(id); setTimeout(() => setCopiedId(null), 2000); }
+    else { setCopied(true); setTimeout(() => setCopied(false), 2000); }
   };
 
   const reset = () => {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
-    setAudioBlob(null);
-    setAudioUrl(null);
-    setTranscription("");
-    setError(null);
+    setAudioBlob(null); setAudioUrl(null); setTranscription(""); setError(null);
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0b] font-sans text-[#e0e0e0] selection:bg-[#ff4e00]/30 p-4 md:p-8 flex flex-col items-center" dir="rtl">
-      <header className="max-w-4xl w-full flex justify-between items-center mb-8 border-b border-[#ffffff10] pb-6 pt-4" dir="ltr">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-[0_0_20px_rgba(255,255,255,0.1)]">
-            <div className="w-6 h-1 bg-[#0a0a0b] rounded-full rotate-45 absolute"></div>
-            <div className="w-6 h-1 bg-[#0a0a0b] rounded-full -rotate-45"></div>
+    <div className="min-h-screen bg-[#0a0a0b] font-sans text-[#e0e0e0] selection:bg-[#ff4e00]/30" dir="rtl">
+
+      {/* ── HEADER ── */}
+      <header className="sticky top-0 z-30 bg-[#0a0a0b]/90 backdrop-blur border-b border-[#ffffff10]">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-4">
+          {/* Logo */}
+          <div className="flex items-center gap-2 shrink-0" dir="ltr">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 bg-white rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(255,255,255,0.1)] relative">
+              <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full rotate-45 absolute"></div>
+              <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full -rotate-45"></div>
+            </div>
+            <span className="text-lg sm:text-xl font-bold tracking-tighter text-white">VOX<span className="text-[#ff4e00]">SCRIPT</span></span>
           </div>
-          <span className="text-2xl font-bold tracking-tighter text-white">VOX<span className="text-[#ff4e00]">SCRIPT</span></span>
-        </div>
-        <div className="flex gap-6 text-sm font-medium text-[#888]">
-          <button 
-            onClick={() => setActiveTab('transcribe')}
-            className={`transition-colors ${activeTab === 'transcribe' ? 'text-white border-b-2 border-[#ff4e00] pb-1' : 'hover:text-[#bbb]'}`}
-          >
-            Transcribe
-          </button>
-          <button 
-            onClick={() => setActiveTab('library')}
-            className={`transition-colors ${activeTab === 'library' ? 'text-white border-b-2 border-[#ff4e00] pb-1' : 'hover:text-[#bbb]'}`}
-          >
-            Library
-          </button>
-        </div>
-        <div className="px-4 py-2 bg-[#1a1a1c] border border-[#ffffff10] rounded-full text-[10px] uppercase tracking-widest font-mono hidden md:block">
-          Status: <span className="text-green-500">● Ready</span>
+
+          {/* Nav tabs */}
+          <nav className="flex gap-1 bg-[#141416] border border-[#ffffff10] rounded-lg p-1" dir="ltr">
+            {(['transcribe', 'library'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-3 sm:px-4 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all ${
+                  activeTab === tab
+                    ? 'bg-[#ff4e00] text-white shadow-sm'
+                    : 'text-[#888] hover:text-white'
+                }`}
+              >
+                {tab === 'transcribe' ? 'Transcribe' : 'Library'}
+                {tab === 'library' && history.length > 0 && (
+                  <span className={`mr-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${activeTab === 'library' ? 'bg-white/20' : 'bg-[#ffffff15]'}`}>
+                    {history.length}
+                  </span>
+                )}
+              </button>
+            ))}
+          </nav>
+
+          {/* Status */}
+          <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono text-[#555] uppercase tracking-widest">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+            Online
+          </div>
         </div>
       </header>
 
-      <main className="max-w-3xl w-full space-y-8">
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+
         {activeTab === 'transcribe' ? (
           <>
-            {/* Input Section */}
-            <section className="bg-[#141416] border border-[#ffffff10] rounded-2xl p-6 md:p-8 shadow-2xl">
-              <div className="flex flex-col items-center space-y-8">
-                
-                {/* Model and Language Selectors */}
-                <div className="flex flex-col md:flex-row gap-4 w-full max-w-lg mb-2">
-                  <div className="flex flex-col gap-2 flex-1">
-                    <span className="text-[10px] uppercase tracking-widest text-[#888] font-bold text-center">زمان</span>
-                    <div className="flex justify-center bg-[#0a0a0b] p-1 rounded-lg border border-[#ffffff10] w-full relative">
-                      <div 
-                        className="absolute top-1 bottom-1 w-[calc(50%-4px)] bg-[#1a1a1c] border border-[#ffffff10] rounded-md transition-all duration-300 ease-in-out"
-                        style={{ right: targetLanguage === 'ku' ? '4px' : 'calc(50%)' }}
-                      />
-                      <button 
-                        onClick={() => setTargetLanguage('ku')}
-                        className={`flex-1 py-2 text-sm font-medium transition-colors relative z-10 ${targetLanguage === 'ku' ? 'text-white' : 'text-[#888] hover:text-[#bbb]'}`}
-                      >
-                        کوردی
-                      </button>
-                      <button 
-                        onClick={() => setTargetLanguage('ar')}
-                        className={`flex-1 py-2 text-sm font-medium transition-colors relative z-10 ${targetLanguage === 'ar' ? 'text-white' : 'text-[#888] hover:text-[#bbb]'}`}
-                      >
-                        عەرەبی
-                      </button>
-                    </div>
-                  </div>
+            {/* ── CONTROLS ── */}
+            <section className="bg-[#141416] border border-[#ffffff10] rounded-2xl overflow-hidden shadow-2xl">
 
-                  <div className="flex flex-col gap-2 flex-1">
-                    <span className="text-[10px] uppercase tracking-widest text-[#888] font-bold text-center">مۆدێل</span>
-                    <div className="flex justify-center bg-[#0a0a0b] p-1 rounded-lg border border-[#ffffff10] w-full">
-                      <select 
-                        value={selectedModel} 
-                        onChange={(e) => setSelectedModel(e.target.value as any)}
-                        className="w-full bg-transparent text-sm font-medium text-white py-2 px-3 outline-none cursor-pointer appearance-none text-center"
-                        dir="ltr"
+              {/* Settings row */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-[#ffffff08] border-b border-[#ffffff08]">
+                {/* Language */}
+                <div className="p-4 flex flex-col gap-2">
+                  <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold">زمان</span>
+                  <div className="flex bg-[#0a0a0b] p-1 rounded-lg border border-[#ffffff08] relative">
+                    <div
+                      className="absolute top-1 bottom-1 w-[calc(50%-4px)] bg-[#ff4e00]/15 border border-[#ff4e00]/30 rounded-md transition-all duration-300"
+                      style={{ right: targetLanguage === 'ku' ? '4px' : 'calc(50%)' }}
+                    />
+                    {(['ku', 'ar'] as const).map(lang => (
+                      <button
+                        key={lang}
+                        onClick={() => setTargetLanguage(lang)}
+                        className={`flex-1 py-2 text-sm font-medium transition-colors relative z-10 ${targetLanguage === lang ? 'text-white' : 'text-[#666] hover:text-[#aaa]'}`}
                       >
-                        <option value="gemini" className="bg-[#1a1a1c]">Gemini 2.5 Flash</option>
-                        <option value="scribe" className="bg-[#1a1a1c]">ElevenLabs Scribe</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-2 flex-1">
-                    <span className="text-[10px] uppercase tracking-widest text-[#888] font-bold text-center">بچووککردنەوەی قەبارە (Compress)</span>
-                    <label className="flex items-center justify-center gap-2 bg-[#0a0a0b] p-3 rounded-lg border border-[#ffffff10] w-full cursor-pointer hover:border-[#ffffff20] transition-colors">
-                      <input 
-                        type="checkbox" 
-                        checked={shouldCompress}
-                        onChange={(e) => setShouldCompress(e.target.checked)}
-                        className="w-4 h-4 accent-[#ff4e00] rounded bg-[#1a1a1c] border-[#ffffff20] focus:ring-0 focus:ring-offset-0"
-                      />
-                      <span className="text-sm font-medium text-white select-none">
-                        بەڵێ
-                      </span>
-                    </label>
+                        {lang === 'ku' ? 'کوردی' : 'عەرەبی'}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                <div className="flex justify-center gap-6 w-full">
+                {/* Model */}
+                <div className="p-4 flex flex-col gap-2">
+                  <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold">مۆدێل</span>
+                  <div className="relative">
+                    <select
+                      value={selectedModel}
+                      onChange={e => setSelectedModel(e.target.value as any)}
+                      className="w-full bg-[#0a0a0b] border border-[#ffffff08] text-sm font-medium text-white py-2.5 pl-3 pr-8 rounded-lg outline-none cursor-pointer appearance-none"
+                      dir="ltr"
+                    >
+                      <option value="gemini" className="bg-[#1a1a1c]">Gemini 2.5 Flash</option>
+                      <option value="scribe" className="bg-[#1a1a1c]">ElevenLabs Scribe</option>
+                    </select>
+                    <ChevronDown size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#555] pointer-events-none" />
+                  </div>
+                </div>
+
+                {/* Compress */}
+                <div className="p-4 flex flex-col gap-2">
+                  <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold">بچووککردنەوەی قەبارە</span>
+                  <label className="flex items-center gap-3 bg-[#0a0a0b] border border-[#ffffff08] rounded-lg px-3 py-2.5 cursor-pointer hover:border-[#ffffff15] transition-colors h-[42px]">
+                    <div
+                      onClick={() => setShouldCompress(p => !p)}
+                      className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer shrink-0 ${shouldCompress ? 'bg-[#ff4e00]' : 'bg-[#333]'}`}
+                    >
+                      <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200 ${shouldCompress ? 'left-4' : 'left-0.5'}`} />
+                    </div>
+                    <span className="text-sm text-[#aaa] select-none">{shouldCompress ? 'چالاکە' : 'ناچالاکە'}</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Record / Upload */}
+              <div className="p-4 sm:p-6">
+                <div className="grid grid-cols-2 gap-3 sm:gap-4">
                   {!isRecording ? (
                     <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
+                      whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
                       onClick={startRecording}
                       disabled={isTranscribing}
-                      className="flex flex-col items-center gap-3 p-6 rounded-2xl bg-[#1a1a1c] border border-[#ffffff10] text-[#e0e0e0] hover:bg-[#222] transition-all w-1/2 disabled:opacity-50 group"
+                      className="flex flex-col items-center gap-3 p-5 sm:p-7 rounded-2xl bg-[#1a1a1c] border border-[#ffffff08] hover:border-[#ff4e00]/30 hover:bg-[#1e1e20] transition-all disabled:opacity-40 group"
                     >
-                      <div className="p-4 bg-[#ff4e00] text-white rounded-full ring-4 ring-[#ff4e00]/20 group-hover:scale-110 transition-transform">
-                        <Mic size={24} />
+                      <div className="p-3.5 sm:p-4 bg-[#ff4e00] text-white rounded-full ring-4 ring-[#ff4e00]/15 group-hover:ring-[#ff4e00]/30 group-hover:scale-105 transition-all">
+                        <Mic size={22} />
                       </div>
-                      <span className="text-[10px] uppercase tracking-widest text-[#888] font-bold mt-2">تۆمارکردن</span>
+                      <span className="text-[10px] sm:text-xs uppercase tracking-widest text-[#666] font-bold">تۆمارکردن</span>
                     </motion.button>
                   ) : (
                     <motion.button
-                      initial={{ scale: 0.9 }}
-                      animate={{ scale: [1, 1.05, 1], transition: { repeat: Infinity, duration: 1.5 } }}
+                      animate={{ scale: [1, 1.03, 1], transition: { repeat: Infinity, duration: 1.5 } }}
                       onClick={stopRecording}
-                      className="flex flex-col items-center gap-3 p-6 rounded-2xl bg-[#ff4e00]/10 border border-[#ff4e00]/30 text-[#ff4e00] hover:bg-[#ff4e00]/20 transition-all w-1/2"
+                      className="flex flex-col items-center gap-3 p-5 sm:p-7 rounded-2xl bg-[#ff4e00]/08 border border-[#ff4e00]/25 hover:bg-[#ff4e00]/12 transition-all"
                     >
-                      <div className="p-4 bg-[#ff4e00] text-white rounded-full shadow-[0_0_15px_rgba(255,78,0,0.5)]">
-                        <Square size={24} fill="currentColor" />
+                      <div className="p-3.5 sm:p-4 bg-[#ff4e00] text-white rounded-full shadow-[0_0_20px_rgba(255,78,0,0.4)]">
+                        <Square size={22} fill="currentColor" />
                       </div>
-                      <span className="text-[10px] uppercase tracking-widest text-[#ff4e00] font-bold mt-2">ڕاگرتن</span>
+                      <span className="text-[10px] sm:text-xs uppercase tracking-widest text-[#ff4e00] font-bold">ڕاگرتن</span>
                     </motion.button>
                   )}
 
-                  <label className="flex flex-col items-center gap-3 p-6 rounded-2xl bg-[#141416] text-[#888] hover:bg-[#1a1a1c] transition-all w-1/2 cursor-pointer border border-dashed border-[#ffffff20] hover:border-[#ffffff40]">
-                    <div className="p-4 bg-[#1a1a1c] border border-[#ffffff10] text-[#e0e0e0] rounded-full">
-                      <Upload size={24} />
+                  <label className="flex flex-col items-center gap-3 p-5 sm:p-7 rounded-2xl bg-[#0f0f11] border border-dashed border-[#ffffff12] hover:border-[#ffffff25] hover:bg-[#141416] transition-all cursor-pointer">
+                    <div className="p-3.5 sm:p-4 bg-[#1a1a1c] border border-[#ffffff10] text-[#aaa] rounded-full">
+                      <Upload size={22} />
                     </div>
-                    <span className="text-[10px] uppercase tracking-widest font-bold mt-2">بارکردنی فایل</span>
+                    <span className="text-[10px] sm:text-xs uppercase tracking-widest font-bold text-[#666]">بارکردنی فایل</span>
                     <input type="file" accept="audio/*" onChange={handleFileUpload} className="hidden" disabled={isTranscribing} />
                   </label>
                 </div>
 
-                <AnimatePresence mode="wait">
+                {/* Audio preview + transcribe button */}
+                <AnimatePresence>
                   {audioBlob && (
                     <motion.div
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.95 }}
-                      className="w-full flex flex-col items-center gap-6 pt-6 border-t border-[#ffffff05]"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="mt-4 space-y-3"
                     >
-                      <div className="flex items-center justify-between w-full bg-[#1a1a1c] px-4 py-3 rounded-xl border border-[#ffffff10]">
-                        <div className="flex items-center gap-3">
-                          <FileAudio size={18} className="text-[#ff4e00]" />
-                          <div className="flex flex-col">
-                            <span className="text-[11px] font-mono tracking-wider text-[#e0e0e0] uppercase" dir="ltr">AUDIO_INPUT.WAV</span>
-                            {audioBlob && (
-                              <span className="text-[10px] font-mono tracking-wider text-[#888]" dir="ltr">
-                                {(audioBlob.size / (1024 * 1024)).toFixed(2)} MB
-                              </span>
-                            )}
+                      <div className="flex items-center justify-between bg-[#0a0a0b] px-4 py-3 rounded-xl border border-[#ffffff08]">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <FileAudio size={16} className="text-[#ff4e00] shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-mono text-white truncate" dir="ltr">AUDIO_INPUT</p>
+                            <p className="text-[10px] font-mono text-[#555]" dir="ltr">{(audioBlob.size / (1024 * 1024)).toFixed(2)} MB</p>
                           </div>
                         </div>
-                        <button onClick={reset} className="text-[#888] hover:text-[#ff4e00] transition-colors p-1">
-                          <Trash2 size={16} />
+                        <button onClick={reset} className="text-[#555] hover:text-[#ff4e00] transition-colors p-1.5 shrink-0">
+                          <Trash2 size={15} />
                         </button>
                       </div>
 
                       {audioUrl && (
-                        <div className="w-full bg-[#0a0a0b] rounded-xl border border-[#ffffff10] p-3 overflow-hidden shadow-inner">
-                          <audio controls src={audioUrl} className="w-full h-10 outline-none" style={{ colorScheme: 'dark' }} />
+                        <div className="bg-[#0a0a0b] rounded-xl border border-[#ffffff08] p-2.5">
+                          <audio controls src={audioUrl} className="w-full h-9 outline-none" style={{ colorScheme: 'dark' }} />
                         </div>
                       )}
 
                       <motion.button
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
+                        whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
                         onClick={() => transcribeAudio()}
                         disabled={isTranscribing}
-                        className="w-full py-4 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.2em] uppercase shadow-[0_0_20px_rgba(255,78,0,0.3)] hover:shadow-[0_0_30px_rgba(255,78,0,0.5)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+                        className="w-full py-3.5 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.15em] uppercase shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5"
                         dir="ltr"
                       >
                         {isTranscribing ? (
-                          <>
-                            <Loader2 className="animate-spin" size={18} />
-                            {shouldCompress ? "COMPRESSING & PROCESSING..." : "PROCESSING..."}
-                          </>
-                        ) : (
-                          "TRANSCRIBE AUDIO"
-                        )}
+                          <><Loader2 className="animate-spin" size={16} />{shouldCompress ? "COMPRESSING & PROCESSING..." : "PROCESSING..."}</>
+                        ) : "TRANSCRIBE AUDIO"}
                       </motion.button>
                     </motion.div>
                   )}
@@ -431,9 +373,8 @@ export default function App() {
 
                 {error && (
                   <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="text-[#ff4e00] text-[11px] font-mono tracking-wider bg-[#ff4e00]/10 border border-[#ff4e00]/20 px-4 py-3 rounded-lg w-full text-center mt-2"
+                    initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                    className="mt-4 text-[#ff4e00] text-xs font-mono bg-[#ff4e00]/08 border border-[#ff4e00]/20 px-4 py-3 rounded-xl text-center"
                   >
                     {error}
                   </motion.div>
@@ -441,124 +382,114 @@ export default function App() {
               </div>
             </section>
 
-            {/* Results Section */}
+            {/* ── RESULT ── */}
             <AnimatePresence>
               {transcription && (
                 <motion.section
-                  initial={{ opacity: 0, y: 20 }}
+                  initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="bg-[#141416] rounded-2xl p-8 md:p-10 shadow-2xl border border-[#ffffff10] relative"
+                  className="bg-[#141416] rounded-2xl border border-[#ffffff10] shadow-2xl overflow-hidden"
                 >
-                  <div className="flex justify-between items-center mb-8 pb-4 border-b border-[#ffffff05]" dir="ltr">
-                    <h3 className="text-[10px] uppercase tracking-widest text-[#888] font-bold">Transcription Output</h3>
-                    <div className="flex items-center gap-3">
+                  {/* Result header */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-7 py-4 border-b border-[#ffffff08]" dir="ltr">
+                    <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold">Transcription Output</span>
+                    <div className="flex items-center gap-2 flex-wrap">
                       {targetLanguage === 'ku' && audioBlob && !isTranscribing && (
                         <button
                           onClick={() => transcribeAudio('ar')}
-                          className="flex items-center gap-2 px-3 py-1.5 bg-[#ff4e00]/10 border border-[#ff4e00]/30 rounded text-[10px] uppercase tracking-wider hover:bg-[#ff4e00]/20 text-[#ff4e00] transition-colors font-bold"
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#ff4e00]/10 border border-[#ff4e00]/25 rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#ff4e00]/20 text-[#ff4e00] transition-colors font-bold"
                         >
                           وەرگێڕان بۆ عەرەبی
                         </button>
                       )}
                       <button
-                        onClick={copyToClipboard}
-                        className="flex items-center gap-2 px-3 py-1.5 bg-[#1a1a1c] border border-[#ffffff10] rounded text-[10px] uppercase tracking-wider hover:bg-[#222] text-[#e0e0e0] transition-colors"
+                        onClick={() => copyText(transcription)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1a1a1c] border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#222] text-[#bbb] transition-colors"
                       >
-                        {copied ? (
-                          <>
-                            <Check size={14} className="text-green-400" />
-                            COPIED
-                          </>
-                        ) : (
-                          <>
-                            <Copy size={14} />
-                            COPY
-                          </>
-                        )}
+                        {copied ? <><Check size={12} className="text-green-400" />COPIED</> : <><Copy size={12} />COPY</>}
                       </button>
                     </div>
                   </div>
-                  <div className="bg-transparent min-h-[150px] leading-relaxed text-[#e0e0e0] text-2xl md:text-3xl whitespace-pre-wrap font-sans">
+
+                  {/* Result text */}
+                  <div className="px-5 sm:px-7 py-6 text-[#e8e8e8] text-xl sm:text-2xl md:text-3xl leading-relaxed whitespace-pre-wrap min-h-[120px]">
                     {transcription}
                   </div>
-                  <div className="mt-8 flex items-center gap-4 pt-4" dir="ltr">
-                    <div className="flex-1 h-1 bg-[#1a1a1c] rounded-full overflow-hidden">
-                      <div className="w-full h-full bg-[#ff4e00]"></div>
-                    </div>
-                    <span className="text-[10px] font-mono text-[#888] tracking-widest">COMPLETE</span>
+
+                  <div className="px-5 sm:px-7 pb-5 flex items-center gap-3" dir="ltr">
+                    <div className="flex-1 h-px bg-[#ff4e00]/40 rounded-full" />
+                    <span className="text-[10px] font-mono text-[#444] tracking-widest">COMPLETE</span>
                   </div>
                 </motion.section>
               )}
             </AnimatePresence>
           </>
         ) : (
+          /* ── LIBRARY ── */
           <motion.section
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="bg-[#141416] rounded-2xl p-6 md:p-8 border border-[#ffffff10] shadow-2xl"
+            className="bg-[#141416] rounded-2xl border border-[#ffffff10] shadow-2xl overflow-hidden"
           >
-            <div className="flex items-center justify-between mb-8 border-b border-[#ffffff05] pb-6">
+            <div className="flex items-center justify-between px-5 sm:px-7 py-4 border-b border-[#ffffff08]">
               <div className="flex items-center gap-2">
-                <History size={18} className="text-[#888]" />
-                <h3 className="text-[10px] uppercase tracking-widest text-[#888] font-bold" dir="ltr">Transcription Library</h3>
+                <History size={15} className="text-[#555]" />
+                <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold" dir="ltr">Transcription Library</span>
+                {history.length > 0 && (
+                  <span className="text-[10px] px-2 py-0.5 bg-[#ffffff08] rounded-full text-[#666]">{history.length}</span>
+                )}
               </div>
-              <button
-                onClick={() => setDeleteConfirmId('all')}
-                className="text-[#888] hover:text-[#ff4e00] transition-colors flex items-center gap-2 text-[10px] uppercase tracking-wider"
-              >
-                <Trash2 size={14} />
-                سڕینەوەی هەمووی
-              </button>
+              {history.length > 0 && (
+                <button
+                  onClick={() => setDeleteConfirmId('all')}
+                  className="flex items-center gap-1.5 text-[#555] hover:text-[#ff4e00] transition-colors text-[10px] uppercase tracking-wider"
+                >
+                  <Trash2 size={13} />
+                  سڕینەوەی هەمووی
+                </button>
+              )}
             </div>
-            
+
             {history.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {history.map((item) => (
-                  <div key={item.id} className="bg-[#0a0a0b] p-6 rounded-2xl border border-[#ffffff05] flex flex-col gap-4 shadow-lg hover:border-[#ffffff10] transition-colors">
-                    <div className="flex justify-between items-center text-[#888] text-[10px] font-mono tracking-widest uppercase" dir="ltr">
-                      <span className="flex items-center gap-1.5">
-                        <Clock size={12} />
-                        {new Date(item.timestamp).toLocaleDateString()} {new Date(item.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+              <div className="p-4 sm:p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {history.map(item => (
+                  <div
+                    key={item.id}
+                    className="bg-[#0f0f11] p-4 sm:p-5 rounded-xl border border-[#ffffff06] flex flex-col gap-3 hover:border-[#ffffff12] transition-colors"
+                  >
+                    <div className="flex justify-between items-start gap-2" dir="ltr">
+                      <span className="flex items-center gap-1 text-[#444] text-[10px] font-mono">
+                        <Clock size={10} />
+                        {new Date(item.timestamp).toLocaleDateString()} {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
-                      <div className="flex gap-2">
+                      <div className="flex gap-1.5 shrink-0">
                         {item.model && (
-                          <span className="bg-[#1a1a1c] px-2 py-1 rounded text-[#bbb] border border-[#ffffff20]">
-                            {item.model.toUpperCase()}
+                          <span className="bg-[#1a1a1c] px-1.5 py-0.5 rounded text-[9px] text-[#666] border border-[#ffffff12] uppercase">
+                            {item.model}
                           </span>
                         )}
-                        <span className="bg-[#1a1a1c] px-2 py-1 rounded text-[#ff4e00] border border-[#ff4e00]/20">
-                          {item.language === 'ku' ? 'KURDISH' : 'ARABIC'}
+                        <span className="bg-[#ff4e00]/10 px-1.5 py-0.5 rounded text-[9px] text-[#ff4e00] border border-[#ff4e00]/20 uppercase">
+                          {item.language === 'ku' ? 'KU' : 'AR'}
                         </span>
                       </div>
                     </div>
-                    <div className="text-[#e0e0e0] text-lg leading-relaxed font-sans line-clamp-4 flex-1">
-                      {item.text}
-                    </div>
-                    <div className="flex justify-between items-center pt-4 border-t border-[#ffffff05] mt-2">
-                      <span className="text-[10px] text-[#555] font-mono">ID: {item.id.slice(-6)}</span>
-                      <div className="flex gap-2">
+
+                    <p className="text-[#ccc] text-base leading-relaxed line-clamp-4 flex-1">{item.text}</p>
+
+                    <div className="flex justify-between items-center pt-3 border-t border-[#ffffff06]">
+                      <span className="text-[10px] text-[#333] font-mono">#{item.id.slice(-6)}</span>
+                      <div className="flex gap-1.5">
                         <button
                           onClick={() => setDeleteConfirmId(item.id)}
-                          className="text-[#888] hover:text-[#ff4e00] transition-colors text-[10px] uppercase tracking-wider flex items-center gap-1.5 bg-[#1a1a1c] px-3 py-1.5 rounded border border-[#ffffff10]"
+                          className="p-1.5 text-[#444] hover:text-[#ff4e00] bg-[#1a1a1c] border border-[#ffffff08] rounded-lg transition-colors"
                         >
                           <Trash2 size={12} />
-                          سڕینەوە
                         </button>
                         <button
                           onClick={() => copyText(item.text, item.id)}
-                          className="text-[#888] hover:text-[#e0e0e0] transition-colors text-[10px] uppercase tracking-wider flex items-center gap-1.5 bg-[#1a1a1c] px-3 py-1.5 rounded border border-[#ffffff10]"
+                          className="p-1.5 text-[#444] hover:text-white bg-[#1a1a1c] border border-[#ffffff08] rounded-lg transition-colors"
                         >
-                          {copiedId === item.id ? (
-                            <>
-                              <Check size={12} className="text-green-400" />
-                              COPIED
-                            </>
-                          ) : (
-                            <>
-                              <Copy size={12} />
-                              کۆپی
-                            </>
-                          )}
+                          {copiedId === item.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
                         </button>
                       </div>
                     </div>
@@ -566,57 +497,42 @@ export default function App() {
                 ))}
               </div>
             ) : (
-              <div className="text-center py-20">
-                <History size={48} className="mx-auto text-[#ffffff10] mb-4" />
-                <p className="text-[#888] text-sm tracking-wide">هیچ مێژوویەک بوونی نییە</p>
+              <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
+                <History size={40} className="text-[#ffffff08] mb-4" />
+                <p className="text-[#444] text-sm">هیچ مێژوویەک بوونی نییە</p>
               </div>
             )}
           </motion.section>
         )}
       </main>
 
-      <footer className="mt-auto pt-12 pb-6 text-[#444] font-mono text-[10px] tracking-[0.2em] uppercase flex flex-col items-center gap-2" dir="ltr">
-        <div className="flex items-center gap-2">
-          <span>STATUS:</span>
-          <span className="text-green-500">● ONLINE</span>
-        </div>
-        <div>POWERED BY GEMINI AI</div>
+      {/* ── FOOTER ── */}
+      <footer className="max-w-5xl mx-auto px-4 sm:px-6 py-8 flex items-center justify-between text-[#333] font-mono text-[10px] uppercase tracking-widest" dir="ltr">
+        <span>VoxScript</span>
+        <span>Powered by Gemini AI</span>
       </footer>
 
+      {/* ── COOKIE ERROR MODAL ── */}
       <AnimatePresence>
         {cookieError && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
           >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-[#141416] border border-[#ffffff10] rounded-2xl p-8 shadow-2xl max-w-md w-full text-center"
+            <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
+              className="bg-[#141416] border border-[#ffffff10] rounded-2xl p-6 sm:p-8 shadow-2xl max-w-sm w-full text-center"
             >
-              <h3 className="text-2xl font-bold text-white mb-4">
-                پێویست بە ڕێگەپێدانی کووکی دەکات
-              </h3>
-              <p className="text-[#bbb] text-sm mb-8 leading-relaxed">
-                بەهۆی ڕێکارە ئەمنییەکانی وێبگەڕەکەتەوە (وەک Safari یان زانیاری پاراستن) ناتوانرێت دەنگەکە بنێردرێت لەم پەنجەرەیەدا. تکایە ئەپەکە لە تابێکی نوێ بکەرەوە بۆ ئەوەی بە بێ کێشە کار بکات.
+              <h3 className="text-xl font-bold text-white mb-3">پێویست بە ڕێگەپێدانی کووکی دەکات</h3>
+              <p className="text-[#888] text-sm mb-6 leading-relaxed">
+                تکایە ئەپەکە لە تابێکی نوێ بکەرەوە بۆ ئەوەی بە بێ کێشە کار بکات.
               </p>
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2">
                 <button
-                  onClick={() => {
-                    window.open(window.location.href, '_blank');
-                    setCookieError(false);
-                  }}
-                  className="w-full py-3 text-sm font-bold bg-[#ff4e00] text-white rounded-xl hover:bg-[#e64600] transition-colors shadow-[0_0_20px_rgba(255,78,0,0.4)]"
+                  onClick={() => { window.open(window.location.href, '_blank'); setCookieError(false); }}
+                  className="w-full py-3 text-sm font-bold bg-[#ff4e00] text-white rounded-xl hover:bg-[#e64600] transition-colors"
                 >
-                  کردنەوەی ئەپەکە لە تابێکی نوێ
+                  کردنەوەی تابێکی نوێ
                 </button>
-                <button
-                  onClick={() => setCookieError(false)}
-                  className="w-full py-3 text-sm font-medium text-[#888] hover:text-white transition-colors"
-                >
+                <button onClick={() => setCookieError(false)} className="w-full py-2.5 text-sm text-[#555] hover:text-white transition-colors">
                   داخستن
                 </button>
               </div>
@@ -625,41 +541,30 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* ── DELETE CONFIRM MODAL ── */}
       <AnimatePresence>
         {deleteConfirmId && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
           >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-[#141416] border border-[#ffffff10] rounded-2xl p-6 shadow-2xl max-w-sm w-full"
+            <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
+              className="bg-[#141416] border border-[#ffffff10] rounded-2xl p-6 shadow-2xl max-w-xs w-full"
             >
-              <h3 className="text-xl font-bold text-white mb-2">
+              <h3 className="text-lg font-bold text-white mb-2">
                 {deleteConfirmId === 'all' ? 'سڕینەوەی هەموو مێژووەکە' : 'سڕینەوەی مێژوو'}
               </h3>
-              <p className="text-[#888] text-sm mb-6 leading-relaxed">
+              <p className="text-[#666] text-sm mb-5 leading-relaxed">
                 {deleteConfirmId === 'all'
-                  ? 'دڵنیای کە دەتەوێت هەموو مێژووەکە بسڕیتەوە؟ ئەم کردارە گەڕانەوەی بۆ نییە.'
-                  : 'دڵنیای کە دەتەوێت ئەم مێژووە بسڕیتەوە؟ ئەم کردارە گەڕانەوەی بۆ نییە.'}
+                  ? 'دڵنیای کە دەتەوێت هەموو مێژووەکە بسڕیتەوە؟'
+                  : 'دڵنیای کە دەتەوێت ئەم مێژووە بسڕیتەوە؟'}
               </p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setDeleteConfirmId(null)}
-                  className="px-4 py-2 text-sm font-medium text-[#888] hover:text-white transition-colors"
-                >
-                  پاشگەزبوونەوە
-                </button>
-                <button
-                  onClick={confirmDelete}
-                  className="px-4 py-2 text-sm font-medium bg-[#ff4e00] text-white rounded-lg hover:bg-[#e64600] transition-colors shadow-[0_0_15px_rgba(255,78,0,0.3)]"
-                >
-                  بەڵێ، بسڕەوە
-                </button>
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setDeleteConfirmId(null)}
+                  className="px-4 py-2 text-sm text-[#666] hover:text-white transition-colors rounded-lg"
+                >پاشگەزبوونەوە</button>
+                <button onClick={confirmDelete}
+                  className="px-4 py-2 text-sm font-medium bg-[#ff4e00] text-white rounded-lg hover:bg-[#e64600] transition-colors"
+                >بەڵێ، بسڕەوە</button>
               </div>
             </motion.div>
           </motion.div>
