@@ -3,9 +3,9 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "functions": {
-    "api/transcribe.ts": {
-      "maxDuration": 60
-    }
+    "api/transcribe.ts": { "maxDuration": 60 },
+    "api/summarize.ts": { "maxDuration": 30 },
+    "api/subtitles.ts": { "maxDuration": 60 }
   },
   "rewrites": [
     {

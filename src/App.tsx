@@ -235,7 +235,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: transcription, language: targetLanguage }),
       });
-      if (!res.ok) { setSummary('هەڵەیەک ڕوویدا لە کاتی پوختەکردن.'); return; }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({ error: 'هەڵەیەک ڕوویدا' }));
+        setSummary(`هەڵە: ${errData.error || res.status}`);
+        return;
+      }
       const reader = res.body?.getReader();
       if (!reader) return;
       const decoder = new TextDecoder();

@@ -276,6 +276,7 @@ app.post("/api/summarize", async (req, res) => {
   try {
     const { text, language } = req.body;
     if (!text?.trim()) return res.status(400).json({ error: "No text provided" });
+    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "GEMINI_API_KEY نەخوێندراوەتەوە — تکایە لە Vercel Dashboard زیادی بکە." });
 
     const isKurdish = language === 'ku';
     const prompt = isKurdish
