@@ -177,19 +177,21 @@ export default function App() {
       let fullText = "";
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
         if (value) {
-          const chunk = decoder.decode(value, { stream: true });
-          fullText += chunk;
-          setTranscription(p => p + chunk);
+          const chunk = decoder.decode(value, { stream: !done });
+          if (chunk) {
+            fullText += chunk;
+            setTranscription(p => p + chunk);
+          }
         }
+        if (done) break;
       }
+      setIsTranscribing(false);
       if (fullText.trim()) {
         await saveToHistory({ text: fullText, language: langToUse, timestamp: Date.now(), model: selectedModel });
       }
     } catch {
       setError("پەیوەندی لەگەڵ سێرڤەر نییە.");
-    } finally {
       setIsTranscribing(false);
     }
   };
@@ -220,39 +222,46 @@ export default function App() {
 
   const exportText = (format: 'txt' | 'docx' | 'pdf', text: string) => {
     const filename = `voxscript-${Date.now()}`;
+    const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+    const htmlDoc = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>VoxScript</title><style>body{font-family:"Arial","Tahoma",sans-serif;font-size:16pt;line-height:2;direction:rtl;text-align:right;padding:2cm;color:#000;}</style></head><body>${escaped}</body></html>`;
+
     if (format === 'txt') {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = `${filename}.txt`;
-      a.click(); URL.revokeObjectURL(url);
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } else if (format === 'docx') {
-      // Simple RTF file that Word can open, with RTL support
-      const rtf = `{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}{\\*\\ud\\pard\\rtlpar\\qr\\f0\\fs28 ${text.replace(/\\/g,'\\\\').replace(/[{}]/g,'\\$&').replace(/\n/g,'\\par\n')}}}`;
-      const blob = new Blob([rtf], { type: 'application/rtf' });
+      // Word opens HTML .doc files with full Unicode/RTL support
+      const blob = new Blob([htmlDoc], { type: 'application/msword;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = `${filename}.rtf`;
-      a.click(); URL.revokeObjectURL(url);
+      a.href = url; a.download = `${filename}.doc`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } else if (format === 'pdf') {
       const win = window.open('', '_blank');
       if (!win) return;
-      win.document.write(`<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><title>VoxScript</title><style>body{font-family:Arial,sans-serif;font-size:18px;line-height:2;direction:rtl;padding:40px;color:#111;white-space:pre-wrap;}@media print{body{padding:20px}}</style></head><body>${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</body></html>`);
+      win.document.write(htmlDoc);
       win.document.close();
-      setTimeout(() => { win.print(); win.close(); }, 400);
+      setTimeout(() => { win.focus(); win.print(); }, 600);
     }
     setShowExportMenu(false);
   };
 
   const shareText = (platform: 'telegram' | 'whatsapp' | 'native', text: string) => {
-    const encoded = encodeURIComponent(text.slice(0, 4000));
+    // Telegram & WhatsApp have message length limits — trim gracefully
+    const trimmed = text.slice(0, 3900);
+    const encoded = encodeURIComponent(trimmed);
     if (platform === 'telegram') {
-      window.open(`https://t.me/share/url?url=&text=${encoded}`, '_blank');
+      // Use tg:// deep-link: no url param needed, just msg
+      window.open(`https://telegram.me/share/url?url=${encodeURIComponent('.')}&text=${encoded}`, '_blank');
     } else if (platform === 'whatsapp') {
       window.open(`https://wa.me/?text=${encoded}`, '_blank');
     } else if (platform === 'native') {
       if (navigator.share) {
-        navigator.share({ text }).catch(() => {});
+        navigator.share({ text: trimmed }).catch(() => {});
       } else {
         copyText(text);
       }
@@ -510,7 +519,7 @@ export default function App() {
                             >
                               {([
                                 { fmt: 'txt', label: 'دابگرە بە .TXT', sub: 'تێکستی سادە' },
-                                { fmt: 'docx', label: 'دابگرە بە .RTF', sub: 'بۆ Microsoft Word' },
+                                { fmt: 'docx', label: 'دابگرە بە .DOC', sub: 'بۆ Microsoft Word' },
                                 { fmt: 'pdf', label: 'چاپکردن / PDF', sub: 'Print & Save as PDF' },
                               ] as const).map(({ fmt, label, sub }) => (
                                 <button key={fmt} onClick={() => exportText(fmt, transcription)}
