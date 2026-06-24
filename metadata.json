@@ -1,0 +1,6 @@
+{
+  "name": "Kurdish Transcriber",
+  "description": "ئەپێک بۆ گۆڕینی دەنگ بۆ نوسین بە زمانی کوردی",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
