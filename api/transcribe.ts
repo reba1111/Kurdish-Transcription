@@ -59,7 +59,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (targetLanguage === "ar") {
         const chatRes = await ai.models.generateContent({
-          model: "gemini-2.5-pro",
+          model: "gemini-2.5-flash",
           contents: `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Your task is to produce a flawless, publication-quality Arabic translation.
 
 Rules:
@@ -112,7 +112,7 @@ Rules:
         : "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
 
     const responseStream = await ai.models.generateContentStream({
-      model: "gemini-2.5-pro",
+      model: "gemini-2.5-flash",
       contents: [{ parts: [audioPart, { text: promptText }] }],
     });
 
