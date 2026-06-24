@@ -24,15 +24,21 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cookieError, setCookieError] = useState(false);
   const [targetLanguage, setTargetLanguage] = useState<'ku' | 'ar'>('ku');
   const [selectedModel, setSelectedModel] = useState<'gemini' | 'groq' | 'groq-turbo' | 'scribe'>('gemini');
+  const [shouldCompress, setShouldCompress] = useState(true);
   const [activeTab, setActiveTab] = useState<'transcribe' | 'library'>('transcribe');
   const [history, setHistory] = useState<HistoryItem[]>(() => {
     const saved = localStorage.getItem('vox_history');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        return parsed.filter((item: any) => !item.text.toLowerCase().includes('<!doctype html>'));
+        return parsed.filter((item: any) => {
+          if (!item || !item.text) return false;
+          const lowerText = item.text.toLowerCase();
+          return !lowerText.includes('<!doctype html>') && !lowerText.includes('cookie check');
+        });
       } catch {
         return [];
       }
@@ -97,8 +103,8 @@ export default function App() {
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        setError("قەبارەی فایلەکە زۆر گەورەیە. تکایە فایلێکی کەمتر لە ١٠ مێگابایت هەڵبژێرە.");
+      if (file.size > 100 * 1024 * 1024) {
+        setError("قەبارەی فایلەکە زۆر گەورەیە. تکایە فایلێکی کەمتر لە ١٠٠ مێگابایت هەڵبژێرە.");
         return;
       }
       if (audioUrl) URL.revokeObjectURL(audioUrl);
@@ -125,6 +131,7 @@ export default function App() {
     formData.append("audio", audioBlob);
     formData.append("language", langToUse);
     formData.append("model", selectedModel);
+    formData.append("compress", shouldCompress ? "true" : "false");
 
     try {
       const response = await fetch("/api/transcribe", {
@@ -134,7 +141,7 @@ export default function App() {
 
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("text/html")) {
-        setError("تکایە ئەپەکە لە تابێکی نوێ بکەرەوە بۆ ئەوەی ڕێگەپێدانی کووکی تەواو بێت (Cookie check).");
+        setCookieError(true);
         setIsTranscribing(false);
         return;
       }
@@ -312,6 +319,20 @@ export default function App() {
                         <option value="scribe" className="bg-[#1a1a1c]">Scribe v2</option>
                       </select>
                     </div>
+                  </div>
+                  <div className="flex flex-col gap-2 flex-1">
+                    <span className="text-[10px] uppercase tracking-widest text-[#888] font-bold text-center">بچووککردنەوەی قەبارە (Compress)</span>
+                    <label className="flex items-center justify-center gap-2 bg-[#0a0a0b] p-3 rounded-lg border border-[#ffffff10] w-full cursor-pointer hover:border-[#ffffff20] transition-colors">
+                      <input 
+                        type="checkbox" 
+                        checked={shouldCompress}
+                        onChange={(e) => setShouldCompress(e.target.checked)}
+                        className="w-4 h-4 accent-[#ff4e00] rounded bg-[#1a1a1c] border-[#ffffff20] focus:ring-0 focus:ring-offset-0"
+                      />
+                      <span className="text-sm font-medium text-white select-none">
+                        بەڵێ
+                      </span>
+                    </label>
                   </div>
                 </div>
 
@@ -550,6 +571,48 @@ export default function App() {
         </div>
         <div>POWERED BY GEMINI AI</div>
       </footer>
+
+      <AnimatePresence>
+        {cookieError && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-[#141416] border border-[#ffffff10] rounded-2xl p-8 shadow-2xl max-w-md w-full text-center"
+            >
+              <h3 className="text-2xl font-bold text-white mb-4">
+                پێویست بە ڕێگەپێدانی کووکی دەکات
+              </h3>
+              <p className="text-[#bbb] text-sm mb-8 leading-relaxed">
+                بەهۆی ڕێکارە ئەمنییەکانی وێبگەڕەکەتەوە (وەک Safari یان زانیاری پاراستن) ناتوانرێت دەنگەکە بنێردرێت لەم پەنجەرەیەدا. تکایە ئەپەکە لە تابێکی نوێ بکەرەوە بۆ ئەوەی بە بێ کێشە کار بکات.
+              </p>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => {
+                    window.open(window.location.href, '_blank');
+                    setCookieError(false);
+                  }}
+                  className="w-full py-3 text-sm font-bold bg-[#ff4e00] text-white rounded-xl hover:bg-[#e64600] transition-colors shadow-[0_0_20px_rgba(255,78,0,0.4)]"
+                >
+                  کردنەوەی ئەپەکە لە تابێکی نوێ
+                </button>
+                <button
+                  onClick={() => setCookieError(false)}
+                  className="w-full py-3 text-sm font-medium text-[#888] hover:text-white transition-colors"
+                >
+                  داخستن
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {deleteConfirmId && (

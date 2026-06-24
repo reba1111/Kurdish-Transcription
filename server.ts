@@ -4,6 +4,13 @@ import { createServer as createViteServer } from "vite";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import fs from "fs";
+import os from "os";
+import crypto from "crypto";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 dotenv.config();
 
@@ -41,6 +48,36 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
     if (mimeType === 'video/webm') mimeType = 'audio/webm';
     if (mimeType === 'video/mp4') mimeType = 'audio/mp4';
 
+    let finalBuffer = req.file.buffer;
+    let finalMimeType = mimeType;
+    let finalFileName = req.file.originalname || "audio.ogg";
+
+    if (req.body.compress === "true") {
+      const tempInput = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".tmp");
+      const tempOutput = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".mp3");
+      fs.writeFileSync(tempInput, req.file.buffer);
+
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(tempInput)
+          .audioFrequency(16000)
+          .audioChannels(1)
+          .audioBitrate('32k')
+          .toFormat('mp3')
+          .on('end', () => resolve())
+          .on('error', (err) => reject(err))
+          .save(tempOutput);
+      });
+
+      finalBuffer = fs.readFileSync(tempOutput);
+      finalMimeType = "audio/mpeg";
+      finalFileName = "compressed.mp3";
+
+      try {
+        fs.unlinkSync(tempInput);
+        fs.unlinkSync(tempOutput);
+      } catch (e) {}
+    }
+
     // 1. GROQ PATH
     if (selectedModel === 'groq' || selectedModel === 'groq-turbo') {
       if (!process.env.GROQ_API_KEY) {
@@ -48,8 +85,8 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
       }
       
       const formData = new FormData();
-      const blob = new Blob([req.file.buffer], { type: mimeType });
-      formData.append("file", blob, req.file.originalname || "audio.ogg");
+      const blob = new Blob([finalBuffer], { type: finalMimeType });
+      formData.append("file", blob, finalFileName);
       
       const whisperModel = selectedModel === 'groq-turbo' ? "whisper-large-v3-turbo" : "whisper-large-v3";
       formData.append("model", whisperModel);
@@ -100,8 +137,8 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
       }
       
       const formData = new FormData();
-      const blob = new Blob([req.file.buffer], { type: mimeType });
-      formData.append("file", blob, req.file.originalname || "audio.ogg");
+      const blob = new Blob([finalBuffer], { type: finalMimeType });
+      formData.append("file", blob, finalFileName);
       formData.append("model_id", "scribe_v1"); // their current model
       
       const elRes = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
@@ -136,8 +173,8 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
 
     const audioPart = {
       inlineData: {
-        mimeType: mimeType,
-        data: req.file.buffer.toString("base64"),
+        mimeType: finalMimeType,
+        data: finalBuffer.toString("base64"),
       },
     };
 
