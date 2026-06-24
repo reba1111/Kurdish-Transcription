@@ -209,6 +209,68 @@ Rules:
   }
 });
 
+// API route for subtitle generation (SRT / VTT)
+app.post("/api/subtitles", upload.single("audio"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No audio file provided" });
+    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "Gemini API key not configured" });
+
+    const targetLanguage = req.body.language || 'ku';
+    const format: 'srt' | 'vtt' = req.body.format === 'vtt' ? 'vtt' : 'srt';
+
+    let mimeType = req.file.mimetype.split(';')[0];
+    if (mimeType === 'application/ogg') mimeType = 'audio/ogg';
+    if (mimeType === 'video/webm') mimeType = 'audio/webm';
+    if (mimeType === 'video/mp4') mimeType = 'audio/mp4';
+
+    let finalBuffer = req.file.buffer;
+    let finalMimeType = mimeType;
+
+    const shouldCompress = req.body.compress === "true" || req.file.buffer.length / 1024 / 1024 > 20;
+    if (shouldCompress) {
+      const tempIn = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".tmp");
+      const tempOut = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".mp3");
+      fs.writeFileSync(tempIn, req.file.buffer);
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(tempIn).audioFrequency(16000).audioChannels(1).audioBitrate('32k').toFormat('mp3')
+          .on('end', () => resolve()).on('error', reject).save(tempOut);
+      });
+      finalBuffer = fs.readFileSync(tempOut);
+      finalMimeType = "audio/mpeg";
+      try { fs.unlinkSync(tempIn); fs.unlinkSync(tempOut); } catch {}
+    }
+
+    const langLabel = targetLanguage === 'ar' ? 'Arabic' : 'Kurdish (Sorani)';
+    const srtExample = `1\n00:00:00,000 --> 00:00:03,500\nFirst subtitle line here\n\n2\n00:00:03,500 --> 00:00:07,200\nSecond subtitle line here`;
+    const vttExample = `WEBVTT\n\n00:00:00.000 --> 00:00:03.500\nFirst subtitle line here\n\n00:00:03.500 --> 00:00:07.200\nSecond subtitle line here`;
+
+    const prompt = format === 'srt'
+      ? `You are a professional subtitle editor. Listen to this ${langLabel} audio carefully and produce a complete, accurate SRT subtitle file.\n\nRules:\n- Use REAL timestamps from the audio — listen carefully to when each phrase starts and ends\n- Each subtitle block: max 2 lines, max 42 characters per line\n- Natural break points at sentence/clause boundaries\n- Output ONLY the raw SRT content, nothing else — no markdown, no explanation\n\nSRT format example:\n${srtExample}`
+      : `You are a professional subtitle editor. Listen to this ${langLabel} audio carefully and produce a complete, accurate WebVTT subtitle file.\n\nRules:\n- Use REAL timestamps from the audio — listen carefully to when each phrase starts and ends\n- Each subtitle block: max 2 lines, max 42 characters per line\n- Natural break points at sentence/clause boundaries\n- Output ONLY the raw VTT content starting with WEBVTT, nothing else — no markdown, no explanation\n\nVTT format example:\n${vttExample}`;
+
+    const audioPart = { inlineData: { mimeType: finalMimeType, data: finalBuffer.toString("base64") } };
+
+    const result = await ai.models.generateContent({
+      model: "gemini-2.5-pro",
+      config: { temperature: 0 },
+      contents: [{ parts: [audioPart, { text: prompt }] }],
+    });
+
+    let output = (result.text || "").replace(/```[a-z]*\n?/g, '').replace(/```/g, '').trim();
+
+    // Ensure VTT starts with WEBVTT header
+    if (format === 'vtt' && !output.startsWith('WEBVTT')) {
+      output = 'WEBVTT\n\n' + output;
+    }
+
+    res.setHeader("Content-Type", `text/plain; charset=utf-8`);
+    res.send(output);
+  } catch (error: any) {
+    console.error("Subtitles error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error.message || "Failed to generate subtitles" });
+  }
+});
+
 // API route for text summarization
 app.post("/api/summarize", async (req, res) => {
   try {

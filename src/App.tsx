@@ -45,6 +45,7 @@ export default function App() {
   const [summary, setSummary] = useState<string>('');
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
+  const [isExportingSubtitles, setIsExportingSubtitles] = useState(false);
   const editableRef = useRef<HTMLTextAreaElement>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -281,6 +282,37 @@ export default function App() {
       setTimeout(() => { win.focus(); win.print(); }, 600);
     }
     setShowExportMenu(false);
+  };
+
+  const exportSubtitles = async (format: 'srt' | 'vtt') => {
+    if (!audioBlob) return;
+    setIsExportingSubtitles(true);
+    setShowExportMenu(false);
+    try {
+      const formData = new FormData();
+      formData.append("audio", audioBlob);
+      formData.append("language", targetLanguage);
+      formData.append("format", format);
+      formData.append("compress", shouldCompress ? "true" : "false");
+      const res = await fetch("/api/subtitles", { method: "POST", body: formData });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "هەڵەیەک ڕوویدا" }));
+        setError(err.error || "هەڵەیەک ڕوویدا لە دروستکردنی ژێرنووس.");
+        return;
+      }
+      const text = await res.text();
+      const mimeType = format === 'srt' ? 'text/srt;charset=utf-8' : 'text/vtt;charset=utf-8';
+      const blob = new Blob([text], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `voxscript-subtitles-${Date.now()}.${format}`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("پەیوەندی لەگەڵ سێرڤەر نییە.");
+    } finally {
+      setIsExportingSubtitles(false);
+    }
   };
 
   const shareText = (platform: 'telegram' | 'whatsapp' | 'native', text: string) => {
@@ -568,6 +600,22 @@ export default function App() {
                                   <span className="text-[10px] text-[#555] mt-0.5">{sub}</span>
                                 </button>
                               ))}
+                              {audioBlob && (
+                                <div className="border-t border-[#ffffff08]">
+                                  <p className="px-4 pt-2.5 pb-1 text-[9px] uppercase tracking-widest text-[#444] font-bold">ژێرنووس</p>
+                                  {(['srt', 'vtt'] as const).map(fmt => (
+                                    <button key={fmt} onClick={() => exportSubtitles(fmt)} disabled={isExportingSubtitles}
+                                      className="w-full flex flex-col items-start px-4 py-2.5 text-right hover:bg-[#22d3ee]/08 transition-colors border-b border-[#ffffff06] last:border-0 disabled:opacity-50"
+                                    >
+                                      <span className="text-xs text-[#22d3ee] font-medium flex items-center gap-1.5">
+                                        {isExportingSubtitles ? <Loader2 size={10} className="animate-spin" /> : null}
+                                        دابگرە بە .{fmt.toUpperCase()}
+                                      </span>
+                                      <span className="text-[10px] text-[#555] mt-0.5">{fmt === 'srt' ? 'SubRip — بۆ زۆربەی پلەیەرەکان' : 'WebVTT — بۆ وێب و YouTube'}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
                             </motion.div>
                           )}
                         </AnimatePresence>
