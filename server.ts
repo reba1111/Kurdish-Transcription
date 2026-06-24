@@ -107,7 +107,7 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
       
       if (targetLanguage === 'ar') {
         const chatRes = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
+          model: "gemini-2.5-pro",
           contents: `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Your task is to produce a flawless, publication-quality Arabic translation.
 
 Rules:
@@ -142,7 +142,7 @@ ${finalOutput}`
       },
     };
 
-    let modelName = "gemini-2.5-flash";
+    let modelName = "gemini-2.5-pro";
     let promptText = "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
     
     if (targetLanguage === 'ar') {
