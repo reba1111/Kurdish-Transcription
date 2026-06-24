@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2 } from "lucide-react";
+import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles } from "lucide-react";
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from "firebase/auth";
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch } from "firebase/firestore";
 import { auth, db } from "./firebase";
@@ -42,6 +42,9 @@ export default function App() {
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [isEditingTranscription, setIsEditingTranscription] = useState(false);
   const [librarySearch, setLibrarySearch] = useState('');
+  const [summary, setSummary] = useState<string>('');
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
   const editableRef = useRef<HTMLTextAreaElement>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -220,6 +223,36 @@ export default function App() {
     else { setCopied(true); setTimeout(() => setCopied(false), 2000); }
   };
 
+  const summarizeText = async () => {
+    if (!transcription.trim()) return;
+    setIsSummarizing(true);
+    setSummary('');
+    setShowSummary(true);
+    try {
+      const res = await fetch('/api/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: transcription, language: targetLanguage }),
+      });
+      if (!res.ok) { setSummary('هەڵەیەک ڕوویدا لە کاتی پوختەکردن.'); return; }
+      const reader = res.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (value) {
+          const chunk = decoder.decode(value, { stream: !done });
+          if (chunk) setSummary(p => p + chunk);
+        }
+        if (done) break;
+      }
+    } catch {
+      setSummary('پەیوەندی لەگەڵ سێرڤەر نییە.');
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
   const exportText = (format: 'txt' | 'docx' | 'pdf', text: string) => {
     const filename = `voxscript-${Date.now()}`;
     const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
@@ -272,6 +305,7 @@ export default function App() {
   const reset = () => {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioBlob(null); setAudioUrl(null); setTranscription(""); setError(null);
+    setSummary(''); setShowSummary(false);
   };
 
   // Loading state
@@ -501,6 +535,11 @@ export default function App() {
                       >
                         {isEditingTranscription ? <><X size={12} />داخستن</> : <><Pencil size={12} />دەستکاری</>}
                       </button>
+                      <button onClick={summarizeText} disabled={isSummarizing}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all disabled:opacity-50 ${showSummary ? 'bg-[#a855f7]/20 border border-[#a855f7]/50 text-[#a855f7]' : 'bg-[#1a1a1c] border border-[#ffffff10] text-[#bbb] hover:bg-[#a855f7]/10 hover:border-[#a855f7]/30 hover:text-[#a855f7]'}`}
+                      >
+                        {isSummarizing ? <><Loader2 size={12} className="animate-spin" />پوختەکردن...</> : <><Sparkles size={12} />پوختەکردن</>}
+                      </button>
                       <button onClick={() => copyText(transcription)}
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1a1a1c] border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#222] text-[#bbb] transition-colors"
                       >
@@ -583,6 +622,37 @@ export default function App() {
                       >{transcription}</p>
                     )}
                   </div>
+                  {/* Summary panel */}
+                  <AnimatePresence>
+                    {showSummary && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+                        className="border-t border-[#a855f7]/20 overflow-hidden"
+                      >
+                        <div className="px-5 sm:px-7 py-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <Sparkles size={13} className="text-[#a855f7]" />
+                              <span className="text-[10px] uppercase tracking-widest text-[#a855f7] font-bold">پوختەی زیرەکی دەستکرد</span>
+                            </div>
+                            <div className="flex gap-2">
+                              {summary && !isSummarizing && (
+                                <button onClick={() => copyText(summary)} className="text-[10px] text-[#555] hover:text-[#a855f7] transition-colors uppercase tracking-wider">کۆپی</button>
+                              )}
+                              <button onClick={() => setShowSummary(false)} className="text-[#555] hover:text-white transition-colors"><X size={13} /></button>
+                            </div>
+                          </div>
+                          {isSummarizing && !summary ? (
+                            <div className="flex items-center gap-2 text-[#666] text-sm py-2">
+                              <Loader2 size={14} className="animate-spin text-[#a855f7]" />
+                              <span>Gemini پوختەکان دەردەهێنێت...</span>
+                            </div>
+                          ) : (
+                            <p className="text-[#ccc] text-base leading-relaxed whitespace-pre-wrap">{summary}</p>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                   <div className="px-5 sm:px-7 pb-5 flex items-center gap-3" dir="ltr">
                     <div className="flex-1 h-px bg-[#ff4e00]/40 rounded-full" />
                     <span className="text-[10px] font-mono text-[#444] tracking-widest">{isEditingTranscription ? 'EDITING' : 'COMPLETE'}</span>
