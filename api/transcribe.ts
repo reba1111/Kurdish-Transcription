@@ -38,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // SCRIBE PATH
     if (selectedModel === "scribe") {
       if (!process.env.ELEVENLABS_API_KEY) {
-        return res.status(500).json({ error: "ELEVENLABS_API_KEY is not configured" });
+        return res.status(500).json({ error: "ELEVENLABS_API_KEY داخل نەکراوە. تکایە لە Vercel Dashboard → Settings → Environment Variables کلیلەکە زیاد بکە." });
       }
 
       const formData = new FormData();
@@ -87,7 +87,7 @@ ${finalOutput}`,
 
     // GEMINI PATH (default)
     if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: "GEMINI_API_KEY is not configured" });
+      return res.status(500).json({ error: "GEMINI_API_KEY داخل نەکراوە. تکایە لە Vercel Dashboard → Settings → Environment Variables کلیلەکە زیاد بکە." });
     }
 
     const audioPart = {
