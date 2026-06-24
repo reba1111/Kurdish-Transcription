@@ -192,6 +192,10 @@ Rules:
       }
     }
 
+    const lastMsg = String(lastError?.message || '');
+    if (lastMsg.includes('quota') || lastMsg.includes('RESOURCE_EXHAUSTED') || lastMsg.includes('429')) {
+      throw new Error("کۆتای داواکاری ڕۆژانەی Gemini تەواو بووە. تکایە سبەی دووبارە هەوڵ بدەرەوە، یان لە AI Studio billing چالاک بکە، یان مۆدێلی ElevenLabs Scribe بەکاربهێنە.");
+    }
     throw lastError;
   } catch (error: any) {
     console.error("Transcription error:", error);
