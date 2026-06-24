@@ -139,7 +139,10 @@ Rules:
         return;
       } catch (err: any) {
         const status = err?.status || err?.code;
-        if (status === 429 || status === 503 || status === 500) {
+        const msg = String(err?.message || '');
+        const isRetryable = status === 429 || status === 503 || status === 500
+          || msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand') || msg.includes('quota');
+        if (isRetryable) {
           console.log(`[Gemini] ${modelName} failed (${status}), trying next model...`);
           lastError = err;
           continue;
