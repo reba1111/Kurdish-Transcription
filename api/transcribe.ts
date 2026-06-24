@@ -111,7 +111,7 @@ Rules:
 - Return ONLY the final Arabic translation — no explanations, no markdown, no HTML`
         : "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
 
-    const models = ["gemini-2.5-flash", "gemini-2.5-pro"];
+    const models = ["gemini-2.5-flash"];
     let lastError: any = null;
 
     for (const modelName of models) {
