@@ -26,7 +26,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [cookieError, setCookieError] = useState(false);
   const [targetLanguage, setTargetLanguage] = useState<'ku' | 'ar'>('ku');
-  const [selectedModel, setSelectedModel] = useState<'gemini' | 'gemini-flash2' | 'scribe'>('gemini');
+  const [selectedModel, setSelectedModel] = useState<'gemini-pro' | 'gemini' | 'gemini-flash2' | 'scribe'>('gemini-pro');
   const [shouldCompress, setShouldCompress] = useState(true);
   const [activeTab, setActiveTab] = useState<'transcribe' | 'library'>('transcribe');
   const [history, setHistory] = useState<HistoryItem[]>(() => {
@@ -269,8 +269,9 @@ export default function App() {
                       className="w-full bg-[#0a0a0b] border border-[#ffffff08] text-sm font-medium text-white py-2.5 pl-3 pr-8 rounded-lg outline-none cursor-pointer appearance-none"
                       dir="ltr"
                     >
+                      <option value="gemini-pro" className="bg-[#1a1a1c]">Gemini 2.5 Pro ★</option>
                       <option value="gemini" className="bg-[#1a1a1c]">Gemini 2.5 Flash</option>
-                      <option value="gemini-flash2" className="bg-[#1a1a1c]">Gemini 2.0 Flash (فری)</option>
+                      <option value="gemini-flash2" className="bg-[#1a1a1c]">Gemini 2.0 Flash</option>
                       <option value="scribe" className="bg-[#1a1a1c]">ElevenLabs Scribe</option>
                     </select>
                     <ChevronDown size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#555] pointer-events-none" />

@@ -155,8 +155,14 @@ Rules:
 - Return ONLY the final Arabic translation — no explanations, no markdown, no HTML`
       : "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
 
-    const geminiModel = selectedModel === 'gemini-flash2' ? "gemini-2.0-flash" : "gemini-2.5-flash";
-    const models = [geminiModel];
+    const geminiModel = selectedModel === 'gemini-pro'
+      ? "gemini-2.5-pro"
+      : selectedModel === 'gemini-flash2'
+        ? "gemini-2.0-flash"
+        : "gemini-2.5-flash";
+    const models = selectedModel === 'gemini-pro'
+      ? ["gemini-2.5-pro", "gemini-2.5-flash"]
+      : [geminiModel];
     let lastError: any = null;
 
     for (const modelName of models) {
