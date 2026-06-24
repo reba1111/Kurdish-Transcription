@@ -60,9 +60,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (targetLanguage === "ar") {
         const chatRes = await ai.models.generateContent({
           model: "gemini-2.5-flash",
-          contents:
-            "You are an expert translator. Translate the following Kurdish text directly into highly accurate, fluent, and natural standard Arabic (Fusha). Return ONLY the pure raw Arabic text. DO NOT use Markdown formatting. DO NOT wrap the output in any HTML tags. DO NOT provide explanations.\n\nText: " +
-            finalOutput,
+          contents: `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Your task is to produce a flawless, publication-quality Arabic translation.
+
+Rules:
+- Translate into Modern Standard Arabic (Fusha/MSA) with rich, natural vocabulary
+- Preserve the original meaning, tone, and nuance precisely
+- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب)
+- Choose the most contextually appropriate Arabic word for each Kurdish term
+- Maintain the flow and rhythm of the original speech — do not make it sound robotic
+- If a proper noun or name appears, transliterate it correctly into Arabic
+- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML
+
+Kurdish text to translate:
+${finalOutput}`,
         });
         finalOutput = (chatRes.text || finalOutput)
           .replace(/```[a-z]*\n?/g, "")
@@ -89,7 +99,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const promptText =
       targetLanguage === "ar"
-        ? "You are an expert translator. Translate the spoken Kurdish audio directly into highly accurate, fluent, and natural standard Arabic (Fusha). Ensure the Arabic grammar is perfect. Return ONLY the pure raw Arabic text. DO NOT use Markdown formatting. DO NOT wrap the output in any HTML tags."
+        ? `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish audio carefully and produce a flawless, publication-quality Arabic translation.
+
+Rules:
+- Translate into Modern Standard Arabic (Fusha/MSA) with rich, natural vocabulary
+- Preserve the original meaning, tone, and nuance precisely
+- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب)
+- Choose the most contextually appropriate Arabic word for each Kurdish term
+- Maintain the flow and rhythm of the original speech — do not make it sound robotic
+- If a proper noun or name appears, transliterate it correctly into Arabic
+- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML`
         : "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
 
     const responseStream = await ai.models.generateContentStream({
