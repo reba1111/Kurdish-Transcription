@@ -146,13 +146,29 @@ export default function App() {
       }
 
       const contentType = response.headers.get("content-type");
-      if (response.status !== 404 && contentType && contentType.includes("text/html") && !response.ok) {
-        setCookieError(true);
+      if (contentType && contentType.includes("text/html")) {
+        const text = await response.text();
+        if (text.includes("Cookie check") || text.includes("Action required to load your app")) {
+          setCookieError(true);
+        } else if (response.status === 413) {
+          setError("هەڵەی 413: فایلەکە زۆر گەورەیە. Vercel لە هەژماری فری (Hobby) تەنها ڕێگە بە 4.5MB دەدات.");
+        } else if (response.status === 504) {
+          setError("هەڵەی 504: کاتی سێرڤەر تەواو بوو (Timeout). لە Vercel تەنها 10 چرکە ڕێگە پێدراوە بۆ پرۆسێسکردن.");
+        } else if (response.status === 404) {
+          setError("هەڵەی 404: ڕاژەکە نەدۆزرایەوە (API Not Found). لەوانەیە باکەندی ئەپەکە لەسەر Vercel بە دروستی کار نەکات.");
+        } else {
+          setError(`هەڵەی سێرڤەر (${response.status}): وەڵامێکی چاوەڕواننەکراو گەڕایەوە لە سێرڤەرەوە.`);
+        }
         setIsTranscribing(false);
         return;
       }
 
       if (!response.ok) {
+        if (response.status === 413) {
+          setError("هەڵەی 413: فایلەکە زۆر گەورەیە. Vercel لە هەژماری فری (Hobby) تەنها ڕێگە بە 4.5MB دەدات.");
+          setIsTranscribing(false);
+          return;
+        }
         const errorText = await response.text();
         try {
           const data = JSON.parse(errorText);
