@@ -190,7 +190,7 @@ export default function App() {
           model: selectedModel
         };
         setHistory(prev => {
-          const updated = [newItem, ...prev];
+          const updated = [newItem, ...prev].slice(0, 100);
           localStorage.setItem('vox_history', JSON.stringify(updated));
           return updated;
         });
