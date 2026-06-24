@@ -41,7 +41,7 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
     }
 
     const targetLanguage = req.body.language || 'ku';
-    const selectedModel = req.body.model || 'gemini';
+    const selectedModel = req.body.model || 'gemini'; // 'gemini' | 'gemini-flash2' | 'scribe'
     
     let mimeType = req.file.mimetype.split(';')[0];
     if (mimeType === 'application/ogg') mimeType = 'audio/ogg';
@@ -155,13 +155,15 @@ Rules:
 - Return ONLY the final Arabic translation — no explanations, no markdown, no HTML`
       : "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
 
-    const models = ["gemini-2.5-flash"];
+    const geminiModel = selectedModel === 'gemini-flash2' ? "gemini-2.0-flash" : "gemini-2.5-flash";
+    const models = [geminiModel];
     let lastError: any = null;
 
     for (const modelName of models) {
       try {
         const responseStream = await ai.models.generateContentStream({
           model: modelName,
+          config: { temperature: 0 },
           contents: [{ parts: [audioPart, { text: promptText }] }],
         });
 
