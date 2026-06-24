@@ -54,6 +54,14 @@ export default function App() {
   const [processStage, setProcessStage] = useState<'idle'|'compressing'|'uploading'|'transcribing'>('idle');
   const abortControllerRef = useRef<AbortController | null>(null);
   const [showRangeEditor, setShowRangeEditor] = useState(false);
+  // Waveform & volume points
+  const [waveformData, setWaveformData] = useState<number[]>([]);
+  const [waveformLoading, setWaveformLoading] = useState(false);
+  type VolumePoint = { time: number; volume: number };
+  const [volumePoints, setVolumePoints] = useState<VolumePoint[]>([]);
+  const [activePointIdx, setActivePointIdx] = useState<number | null>(null);
+  const [playhead, setPlayhead] = useState(0);
+  const waveCanvasRef = useRef<HTMLCanvasElement>(null);
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
 
@@ -129,6 +137,8 @@ export default function App() {
         setAudioBlob(blob);
         setAudioUrl(URL.createObjectURL(blob));
         stream.getTracks().forEach(t => t.stop());
+        setVolumePoints([]); setActivePointIdx(null);
+        decodeWaveform(blob);
       };
       mediaRecorder.start();
       setIsRecording(true);
@@ -155,6 +165,8 @@ export default function App() {
     setAudioBlob(file);
     setAudioUrl(URL.createObjectURL(file));
     setError(null);
+    setVolumePoints([]); setActivePointIdx(null);
+    decodeWaveform(file);
   };
 
   const cancelTranscription = () => {
@@ -372,7 +384,7 @@ export default function App() {
     setAudioBlob(null); setAudioUrl(null); setTranscription(""); setError(null);
     setSummary(''); setShowSummary(false);
     setAudioDuration(0); setRangeStart(''); setRangeEnd(''); setShowRangeEditor(false);
-    setVolStart(1); setVolEnd(1);
+    setVolStart(1); setVolEnd(1); setWaveformData([]); setVolumePoints([]); setActivePointIdx(null); setPlayhead(0);
   };
 
   const parseMMSS = (val: string): number => {
@@ -406,9 +418,12 @@ export default function App() {
       for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
         const srcData = decoded.getChannelData(ch).subarray(startSample, endSample);
         const dst = sliced.getChannelData(ch);
-        for (let i = 0; i < srcData.length; i++) {
-          const t = frameCount > 1 ? i / (frameCount - 1) : 1;
-          dst[i] = srcData[i] * (volStart + (volEnd - volStart) * t);
+        for (let i = 0; i < frameCount; i++) {
+          const tSec = start + (i / sampleRate);
+          const gain = volumePoints.length > 0
+            ? getVolAtTime(tSec, volumePoints, audioDuration)
+            : 1;
+          dst[i] = srcData[i] * gain;
         }
       }
       audioCtx.close();
@@ -446,6 +461,48 @@ export default function App() {
       }
     }
     return new Blob([ab], { type: 'audio/wav' });
+  };
+
+  // Decode audio blob into waveform peaks (128 bars)
+  const decodeWaveform = async (blob: Blob) => {
+    setWaveformLoading(true);
+    try {
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioCtx = new AudioContext();
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+      audioCtx.close();
+      const raw = decoded.getChannelData(0);
+      const bars = 128;
+      const blockSize = Math.floor(raw.length / bars);
+      const peaks: number[] = [];
+      for (let i = 0; i < bars; i++) {
+        let max = 0;
+        for (let j = 0; j < blockSize; j++) {
+          const v = Math.abs(raw[i * blockSize + j]);
+          if (v > max) max = v;
+        }
+        peaks.push(max);
+      }
+      // Normalize
+      const maxPeak = Math.max(...peaks, 0.01);
+      setWaveformData(peaks.map(p => p / maxPeak));
+    } catch { setWaveformData([]); }
+    finally { setWaveformLoading(false); }
+  };
+
+  // Get volume at a time position by interpolating between volume points
+  const getVolAtTime = (t: number, points: VolumePoint[], duration: number): number => {
+    if (points.length === 0) return 1;
+    const sorted = [...points].sort((a, b) => a.time - b.time);
+    if (t <= sorted[0].time) return sorted[0].volume;
+    if (t >= sorted[sorted.length - 1].time) return sorted[sorted.length - 1].volume;
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if (t >= sorted[i].time && t <= sorted[i + 1].time) {
+        const frac = (t - sorted[i].time) / (sorted[i + 1].time - sorted[i].time);
+        return sorted[i].volume + (sorted[i + 1].volume - sorted[i].volume) * frac;
+      }
+    }
+    return 1;
   };
 
   // Loading state
@@ -622,13 +679,149 @@ export default function App() {
                         <button onClick={reset} className="text-[#555] hover:text-[#ff4e00] transition-colors p-1.5 shrink-0"><Trash2 size={15} /></button>
                       </div>
                       {audioUrl && (
-                        <div className="bg-[#0a0a0b] rounded-xl border border-[#ffffff08] p-2.5">
-                          <audio ref={audioElRef} controls src={audioUrl} className="w-full h-9 outline-none" style={{ colorScheme: 'dark' }}
+                        <div className="bg-[#0a0a0b] rounded-xl border border-[#ffffff08] overflow-hidden">
+                          {/* Hidden native audio for playback control */}
+                          <audio ref={audioElRef} src={audioUrl} className="hidden"
                             onLoadedMetadata={e => {
                               const d = (e.target as HTMLAudioElement).duration;
                               if (isFinite(d)) { setAudioDuration(d); setRangeEnd(fmtMMSS(d)); }
                             }}
+                            onTimeUpdate={e => setPlayhead((e.target as HTMLAudioElement).currentTime)}
                           />
+
+                          {/* Custom waveform player */}
+                          <div className="p-3 space-y-2">
+                            {/* Waveform canvas */}
+                            <div className="relative h-16 cursor-crosshair select-none"
+                              onClick={e => {
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const frac = (e.clientX - rect.left) / rect.width;
+                                const t = frac * audioDuration;
+                                // Add volume point at clicked position
+                                const newPoint: VolumePoint = { time: t, volume: 1 };
+                                const newIdx = volumePoints.length;
+                                setVolumePoints(prev => [...prev, newPoint]);
+                                setActivePointIdx(newIdx);
+                                // Also seek audio
+                                if (audioElRef.current) audioElRef.current.currentTime = t;
+                              }}
+                            >
+                              {/* Waveform bars */}
+                              <div className="absolute inset-0 flex items-center gap-px">
+                                {waveformLoading ? (
+                                  <div className="w-full flex items-center justify-center">
+                                    <Loader2 size={14} className="animate-spin text-[#444]" />
+                                  </div>
+                                ) : waveformData.length > 0 ? waveformData.map((peak, i) => {
+                                  const frac = i / waveformData.length;
+                                  const tSec = frac * audioDuration;
+                                  const isPlayed = audioDuration > 0 && tSec <= playhead;
+                                  const pointGain = volumePoints.length > 0
+                                    ? getVolAtTime(tSec, volumePoints, audioDuration)
+                                    : 1;
+                                  const heightPct = Math.max(4, peak * 100);
+                                  // Color: played=cyan tinted by gain, unplayed=grey
+                                  const gainColor = pointGain > 1
+                                    ? `rgba(34,211,238,${0.4 + Math.min((pointGain-1)/2,0.6)})`
+                                    : pointGain < 1
+                                    ? `rgba(255,78,0,${0.3 + Math.min((1-pointGain),0.5)})`
+                                    : isPlayed ? '#22d3ee' : '#2a2a2e';
+                                  return (
+                                    <div key={i} className="flex-1 flex items-center justify-center" style={{ height: '100%' }}>
+                                      <div className="w-full rounded-sm transition-colors"
+                                        style={{ height: `${heightPct}%`, background: gainColor }} />
+                                    </div>
+                                  );
+                                }) : (
+                                  <div className="w-full h-0.5 bg-[#1a1a1a] rounded-full" />
+                                )}
+                              </div>
+
+                              {/* Playhead line */}
+                              {audioDuration > 0 && (
+                                <div className="absolute top-0 bottom-0 w-px bg-white/60 pointer-events-none"
+                                  style={{ left: `${(playhead / audioDuration) * 100}%` }} />
+                              )}
+
+                              {/* Volume point markers */}
+                              {volumePoints.map((pt, idx) => (
+                                <div key={idx}
+                                  className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full border-2 cursor-pointer transition-all z-10 ${activePointIdx === idx ? 'bg-yellow-400 border-yellow-300 scale-125 shadow-[0_0_8px_rgba(250,204,21,0.8)]' : 'bg-yellow-400/80 border-yellow-500/60 hover:scale-110'}`}
+                                  style={{ left: `${audioDuration > 0 ? (pt.time / audioDuration) * 100 : 0}%` }}
+                                  onClick={e => { e.stopPropagation(); setActivePointIdx(idx); }}
+                                />
+                              ))}
+                            </div>
+
+                            {/* Playback controls */}
+                            <div className="flex items-center gap-3" dir="ltr">
+                              <button onClick={() => {
+                                const a = audioElRef.current; if (!a) return;
+                                a.paused ? a.play() : a.pause();
+                              }}
+                                className="w-8 h-8 flex items-center justify-center rounded-full bg-[#1a1a1c] border border-[#ffffff10] text-white hover:bg-[#222] transition-colors shrink-0"
+                              >
+                                {audioElRef.current?.paused !== false
+                                  ? <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current ml-0.5"><polygon points="5,3 19,12 5,21"/></svg>
+                                  : <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                                }
+                              </button>
+
+                              {/* Seek bar */}
+                              <div className="relative flex-1 h-1.5 bg-[#1a1a1a] rounded-full cursor-pointer"
+                                onClick={e => {
+                                  if (!audioElRef.current || !audioDuration) return;
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  audioElRef.current.currentTime = ((e.clientX - rect.left) / rect.width) * audioDuration;
+                                }}
+                              >
+                                <div className="absolute left-0 top-0 h-full rounded-full bg-[#22d3ee]"
+                                  style={{ width: audioDuration > 0 ? `${(playhead / audioDuration) * 100}%` : '0%' }} />
+                              </div>
+
+                              <span className="text-[10px] font-mono text-[#555] shrink-0 tabular-nums">
+                                {fmtMMSS(playhead)} / {fmtMMSS(audioDuration)}
+                              </span>
+                            </div>
+
+                            {/* Active volume point editor */}
+                            {activePointIdx !== null && volumePoints[activePointIdx] && (
+                              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
+                                className="flex items-center gap-3 bg-[#141416] border border-yellow-400/20 rounded-lg px-3 py-2.5" dir="ltr"
+                              >
+                                <div className="w-3 h-3 rounded-full bg-yellow-400 shrink-0" />
+                                <span className="text-[10px] text-yellow-400 font-mono shrink-0">
+                                  {fmtMMSS(volumePoints[activePointIdx].time)}
+                                </span>
+                                <input type="range" min={0.1} max={3} step={0.05}
+                                  value={volumePoints[activePointIdx].volume}
+                                  onChange={e => {
+                                    const v = parseFloat(e.target.value);
+                                    setVolumePoints(prev => prev.map((p, i) => i === activePointIdx ? { ...p, volume: v } : p));
+                                  }}
+                                  className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer bg-[#1f2937] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-yellow-400 [&::-webkit-slider-thumb]:cursor-grab"
+                                />
+                                <span className="text-[10px] font-mono text-yellow-400 w-10 text-right shrink-0">
+                                  {Math.round(volumePoints[activePointIdx].volume * 100)}%
+                                </span>
+                                <button onClick={() => {
+                                  setVolumePoints(prev => prev.filter((_, i) => i !== activePointIdx));
+                                  setActivePointIdx(null);
+                                }}
+                                  className="text-[#555] hover:text-[#ff4e00] transition-colors shrink-0"
+                                ><X size={12} /></button>
+                              </motion.div>
+                            )}
+
+                            {volumePoints.length > 0 && (
+                              <div className="flex items-center justify-between" dir="ltr">
+                                <span className="text-[9px] text-[#444] uppercase tracking-wider">{volumePoints.length} volume point{volumePoints.length !== 1 ? 's' : ''}</span>
+                                <button onClick={() => { setVolumePoints([]); setActivePointIdx(null); }}
+                                  className="text-[9px] text-[#444] hover:text-[#ff4e00] transition-colors uppercase tracking-wider"
+                                >سڕینەوەی هەمووی</button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       )}
 
