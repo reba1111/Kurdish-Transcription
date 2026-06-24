@@ -41,38 +41,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(500).json({ error: "ELEVENLABS_API_KEY داخل نەکراوە. تکایە لە Vercel Dashboard → Settings → Environment Variables کلیلەکە زیاد بکە." });
       }
 
-      const formData = new FormData();
+      const scribeForm = new FormData();
       const blob = new Blob([fileBuffer], { type: mimeType });
-      formData.append("file", blob, audioFile.originalFilename || "audio.mp3");
-      formData.append("model_id", "scribe_v1");
+      scribeForm.append("file", blob, audioFile.originalFilename || "audio.mp3");
+      scribeForm.append("model_id", "scribe_v1");
+      scribeForm.append("language_code", "ckb"); // Central Kurdish (Sorani) — force language
+      scribeForm.append("tag_audio_events", "false");
 
       const elRes = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
         method: "POST",
         headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY },
-        body: formData,
+        body: scribeForm,
       });
       const elData = await elRes.json();
 
       if (!elRes.ok) throw new Error(elData.detail?.message || "ElevenLabs transcription failed");
 
-      let finalOutput = elData.text;
+      let finalOutput = elData.text || "";
+
+      // Detect if Scribe mis-detected language (output should be Arabic-script for Kurdish Sorani)
+      const arabicScriptRatio = (finalOutput.match(/[؀-ۿ]/g) || []).length / Math.max(finalOutput.replace(/\s/g, "").length, 1);
+      if (arabicScriptRatio < 0.3 && finalOutput.trim().length > 0) {
+        finalOutput = ""; // discard mis-detected output
+      }
 
       if (targetLanguage === "ar") {
+        const arPrompt = finalOutput.trim()
+          ? `You are a professional Arabic translator with deep expertise in Kurdish (Sorani) to Arabic translation. Translate the following Kurdish text into flawless Modern Standard Arabic (Fusha). Return ONLY the Arabic translation — no explanations, no markdown, no HTML.\n\nKurdish text:\n${finalOutput}`
+          : `You are a professional Arabic translator. The audio is in Kurdish (Sorani). Translate directly into flawless Modern Standard Arabic (Fusha). Return ONLY the Arabic translation.`;
+
         const chatRes = await ai.models.generateContent({
           model: "gemini-2.5-flash",
-          contents: `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Your task is to produce a flawless, publication-quality Arabic translation.
-
-Rules:
-- Translate into Modern Standard Arabic (Fusha/MSA) with rich, natural vocabulary
-- Preserve the original meaning, tone, and nuance precisely
-- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب)
-- Choose the most contextually appropriate Arabic word for each Kurdish term
-- Maintain the flow and rhythm of the original speech — do not make it sound robotic
-- If a proper noun or name appears, transliterate it correctly into Arabic
-- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML
-
-Kurdish text to translate:
-${finalOutput}`,
+          contents: arPrompt,
         });
         finalOutput = (chatRes.text || finalOutput)
           .replace(/```[a-z]*\n?/g, "")

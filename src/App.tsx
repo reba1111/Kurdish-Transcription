@@ -55,6 +55,11 @@ export default function App() {
     const q = query(collection(db, "users", user.uid, "history"), orderBy("timestamp", "desc"), limit(100));
     getDocs(q).then(snap => {
       setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() } as HistoryItem)));
+    }).catch(err => {
+      console.error("Firestore error:", err);
+      if (err?.code === 'permission-denied') {
+        setError("مێژووەکان نەخوێندرانەوە: تکایە Firestore Security Rules لە Firebase Console دابنێ.");
+      }
     }).finally(() => setHistoryLoading(false));
   }, [user]);
 
