@@ -111,20 +111,36 @@ Rules:
 - Return ONLY the final Arabic translation — no explanations, no markdown, no HTML`
         : "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
 
-    const responseStream = await ai.models.generateContentStream({
-      model: "gemini-2.5-flash",
-      contents: [{ parts: [audioPart, { text: promptText }] }],
-    });
+    const models = ["gemini-2.5-flash", "gemini-2.5-pro"];
+    let lastError: any = null;
 
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Transfer-Encoding", "chunked");
+    for (const modelName of models) {
+      try {
+        const responseStream = await ai.models.generateContentStream({
+          model: modelName,
+          contents: [{ parts: [audioPart, { text: promptText }] }],
+        });
 
-    for await (const chunk of responseStream) {
-      if (chunk.text) {
-        res.write(chunk.text);
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Transfer-Encoding", "chunked");
+
+        for await (const chunk of responseStream) {
+          if (chunk.text) res.write(chunk.text);
+        }
+        res.end();
+        return;
+      } catch (err: any) {
+        const status = err?.status || err?.code;
+        if (status === 429 || status === 503 || status === 500) {
+          console.log(`[Gemini] ${modelName} failed (${status}), trying next model...`);
+          lastError = err;
+          continue;
+        }
+        throw err;
       }
     }
-    res.end();
+
+    throw lastError;
   } catch (error: any) {
     console.error("Transcription error:", error);
     if (!res.headersSent) {

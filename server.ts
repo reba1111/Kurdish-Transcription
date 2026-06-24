@@ -142,11 +142,8 @@ ${finalOutput}`
       },
     };
 
-    let modelName = "gemini-2.5-flash";
-    let promptText = "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
-    
-    if (targetLanguage === 'ar') {
-      promptText = `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish audio carefully and produce a flawless, publication-quality Arabic translation.
+    const promptText = targetLanguage === 'ar'
+      ? `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish audio carefully and produce a flawless, publication-quality Arabic translation.
 
 Rules:
 - Translate into Modern Standard Arabic (Fusha/MSA) with rich, natural vocabulary
@@ -155,30 +152,39 @@ Rules:
 - Choose the most contextually appropriate Arabic word for each Kurdish term
 - Maintain the flow and rhythm of the original speech — do not make it sound robotic
 - If a proper noun or name appears, transliterate it correctly into Arabic
-- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML`;
-    }
+- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML`
+      : "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
 
-    const responseStream = await ai.models.generateContentStream({
-      model: modelName,
-      contents: [
-        {
-          parts: [
-            audioPart,
-            { text: promptText }
-          ]
+    const models = ["gemini-2.5-flash", "gemini-2.5-pro"];
+    let lastError: any = null;
+
+    for (const modelName of models) {
+      try {
+        const responseStream = await ai.models.generateContentStream({
+          model: modelName,
+          contents: [{ parts: [audioPart, { text: promptText }] }],
+        });
+
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Transfer-Encoding", "chunked");
+
+        for await (const chunk of responseStream) {
+          if (chunk.text) res.write(chunk.text);
         }
-      ],
-    });
-
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Transfer-Encoding", "chunked");
-
-    for await (const chunk of responseStream) {
-      if (chunk.text) {
-        res.write(chunk.text);
+        res.end();
+        return;
+      } catch (err: any) {
+        const status = err?.status || err?.code;
+        if (status === 429 || status === 503 || status === 500) {
+          console.log(`[Gemini] ${modelName} failed (${status}), trying next model...`);
+          lastError = err;
+          continue;
+        }
+        throw err;
       }
     }
-    res.end();
+
+    throw lastError;
   } catch (error: any) {
     console.error("Transcription error:", error);
     if (!res.headersSent) {
