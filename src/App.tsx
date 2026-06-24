@@ -65,8 +65,15 @@ export default function App() {
 
   const saveToHistory = async (item: Omit<HistoryItem, 'id'>) => {
     if (!user) return;
-    const ref = await addDoc(collection(db, "users", user.uid, "history"), item);
-    setHistory(prev => [{ id: ref.id, ...item }, ...prev].slice(0, 100));
+    try {
+      const ref = await addDoc(collection(db, "users", user.uid, "history"), item);
+      setHistory(prev => [{ id: ref.id, ...item }, ...prev].slice(0, 100));
+    } catch (err: any) {
+      console.error("Firestore save error:", err);
+      if (err?.code === 'permission-denied') {
+        setError("مێژوو خەزن نەکرا: تکایە Firestore Rules لە Firebase Console دابنێ. بڕوانە README.");
+      }
+    }
   };
 
   const deleteHistoryItem = async (id: string) => {
