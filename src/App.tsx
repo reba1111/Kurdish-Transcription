@@ -51,6 +51,8 @@ export default function App() {
   const [rangeEnd, setRangeEnd] = useState('');
   const [volStart, setVolStart] = useState(1);
   const [volEnd, setVolEnd] = useState(1);
+  const [processStage, setProcessStage] = useState<'idle'|'compressing'|'uploading'|'transcribing'>('idle');
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [showRangeEditor, setShowRangeEditor] = useState(false);
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
@@ -155,24 +157,32 @@ export default function App() {
     setError(null);
   };
 
-  const transcribeAudio = async (overrideLanguage?: 'ku' | 'ar') => {
-    if (!audioBlob) return;
-    let langToUse = targetLanguage;
-    if (overrideLanguage === 'ku' || overrideLanguage === 'ar') {
-      langToUse = overrideLanguage;
-      setTargetLanguage(overrideLanguage);
-    }
+  const cancelTranscription = () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setIsTranscribing(false);
+    setProcessStage('idle');
+  };
+
+  const runTranscription = async (blob: Blob, langToUse: 'ku' | 'ar', compress: boolean) => {
+    const ac = new AbortController();
+    abortControllerRef.current = ac;
     setIsTranscribing(true);
     setError(null);
     setTranscription("");
     setIsEditingTranscription(false);
-    const formData = new FormData();
-    formData.append("audio", audioBlob);
-    formData.append("language", langToUse);
-    formData.append("model", selectedModel);
-    formData.append("compress", shouldCompress ? "true" : "false");
+
     try {
-      const response = await fetch("/api/transcribe", { method: "POST", body: formData });
+      setProcessStage(compress ? 'compressing' : 'uploading');
+      const formData = new FormData();
+      formData.append("audio", blob);
+      formData.append("language", langToUse);
+      formData.append("model", selectedModel);
+      formData.append("compress", compress ? "true" : "false");
+
+      setProcessStage('uploading');
+      const response = await fetch("/api/transcribe", { method: "POST", body: formData, signal: ac.signal });
+
       if (response.status === 404) { setError("هەڵەی 404: API نەدۆزرایەوە."); return; }
       const contentType = response.headers.get("content-type");
       if (contentType?.includes("text/html") && !response.ok) { setCookieError(true); return; }
@@ -182,6 +192,8 @@ export default function App() {
         catch { setError("هەڵەیەک ڕوویدا لە کاتی گۆڕینی دەنگەکە."); }
         return;
       }
+
+      setProcessStage('transcribing');
       const reader = response.body?.getReader();
       if (!reader) throw new Error("No reader");
       const decoder = new TextDecoder();
@@ -190,21 +202,31 @@ export default function App() {
         const { value, done } = await reader.read();
         if (value) {
           const chunk = decoder.decode(value, { stream: !done });
-          if (chunk) {
-            fullText += chunk;
-            setTranscription(p => p + chunk);
-          }
+          if (chunk) { fullText += chunk; setTranscription(p => p + chunk); }
         }
         if (done) break;
       }
       setIsTranscribing(false);
+      setProcessStage('idle');
       if (fullText.trim()) {
         await saveToHistory({ text: fullText, language: langToUse, timestamp: Date.now(), model: selectedModel });
       }
-    } catch {
-      setError("پەیوەندی لەگەڵ سێرڤەر نییە.");
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return; // user cancelled
+      setError(err.message || "پەیوەندی لەگەڵ سێرڤەر نییە.");
       setIsTranscribing(false);
+      setProcessStage('idle');
     }
+  };
+
+  const transcribeAudio = (overrideLanguage?: 'ku' | 'ar') => {
+    if (!audioBlob) return;
+    let langToUse = targetLanguage;
+    if (overrideLanguage === 'ku' || overrideLanguage === 'ar') {
+      langToUse = overrideLanguage;
+      setTargetLanguage(overrideLanguage);
+    }
+    runTranscription(audioBlob, langToUse, shouldCompress);
   };
 
   const copyText = (text: string, id: string | null = null) => {
@@ -371,26 +393,18 @@ export default function App() {
     const end = parseMMSS(rangeEnd) || audioDuration;
     if (start >= end) { setError("کاتی دەستپێکردن پێویستە کەمتر بێت لە کاتی کۆتایی."); return; }
 
-    setIsTranscribing(true);
-    setError(null);
-    setTranscription("");
-    setIsEditingTranscription(false);
-
+    setProcessStage('compressing');
     try {
-      // Decode → slice → re-encode as WAV using WebAudio API
       const arrayBuffer = await audioBlob.arrayBuffer();
       const audioCtx = new AudioContext();
       const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-
       const sampleRate = decoded.sampleRate;
       const startSample = Math.floor(start * sampleRate);
       const endSample = Math.min(Math.floor(end * sampleRate), decoded.length);
       const frameCount = endSample - startSample;
-
       const sliced = audioCtx.createBuffer(decoded.numberOfChannels, frameCount, sampleRate);
       for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
         const srcData = decoded.getChannelData(ch).subarray(startSample, endSample);
-        // Apply linear volume fade from volStart to volEnd
         const dst = sliced.getChannelData(ch);
         for (let i = 0; i < srcData.length; i++) {
           const t = frameCount > 1 ? i / (frameCount - 1) : 1;
@@ -398,43 +412,12 @@ export default function App() {
         }
       }
       audioCtx.close();
-
-      // Encode sliced AudioBuffer to WAV
       const wavBlob = audioBufferToWavBlob(sliced);
-
-      // Send to transcribe API
-      const formData = new FormData();
-      formData.append("audio", wavBlob, "range.wav");
-      formData.append("language", targetLanguage);
-      formData.append("model", selectedModel);
-      formData.append("compress", "false"); // already small slice
-
-      const response = await fetch("/api/transcribe", { method: "POST", body: formData });
-      if (!response.ok) {
-        const txt = await response.text();
-        try { setError(JSON.parse(txt).error || "هەڵەیەک ڕوویدا."); }
-        catch { setError("هەڵەیەک ڕوویدا لە کاتی گۆڕینی دەنگەکە."); }
-        return;
-      }
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No reader");
-      const decoder = new TextDecoder();
-      let fullText = "";
-      while (true) {
-        const { value, done } = await reader.read();
-        if (value) {
-          const chunk = decoder.decode(value, { stream: !done });
-          if (chunk) { fullText += chunk; setTranscription(p => p + chunk); }
-        }
-        if (done) break;
-      }
-      setIsTranscribing(false);
-      if (fullText.trim()) {
-        await saveToHistory({ text: fullText, language: targetLanguage, timestamp: Date.now(), model: selectedModel });
-      }
+      await runTranscription(wavBlob, targetLanguage, false);
     } catch (err: any) {
       setError(err.message || "هەڵەیەک ڕوویدا لە کاتی ئیدیتکردنی دەنگ.");
       setIsTranscribing(false);
+      setProcessStage('idle');
     }
   };
 
@@ -756,14 +739,59 @@ export default function App() {
                         </AnimatePresence>
                       </div>
 
-                      <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                        onClick={() => transcribeAudio()} disabled={isTranscribing}
-                        className="w-full py-3.5 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.15em] uppercase shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5" dir="ltr"
-                      >
-                        {isTranscribing
-                          ? <><Loader2 className="animate-spin" size={16} />{shouldCompress ? "COMPRESSING & PROCESSING..." : "PROCESSING..."}</>
-                          : "TRANSCRIBE AUDIO"}
-                      </motion.button>
+                      {/* Progress bar */}
+                      <AnimatePresence>
+                        {isTranscribing && (
+                          <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                            className="rounded-xl border border-[#ffffff08] bg-[#0a0a0b] px-4 py-3 space-y-2"
+                          >
+                            <div className="flex items-center justify-between" dir="ltr">
+                              <div className="flex items-center gap-2">
+                                <Loader2 size={13} className="animate-spin text-[#ff4e00]" />
+                                <span className="text-[10px] font-mono text-[#aaa] uppercase tracking-wider">
+                                  {processStage === 'compressing' && 'فشردن و ئامادەکردن...'}
+                                  {processStage === 'uploading' && 'ناردن بۆ سێرڤەر...'}
+                                  {processStage === 'transcribing' && 'گۆڕینی دەنگ بە نووسین...'}
+                                </span>
+                              </div>
+                              <button onClick={cancelTranscription}
+                                className="flex items-center gap-1 text-[10px] text-[#555] hover:text-[#ff4e00] transition-colors uppercase tracking-wider font-bold px-2 py-1 rounded border border-[#ffffff08] hover:border-[#ff4e00]/30"
+                              >
+                                <X size={10} />ڕاگرتن
+                              </button>
+                            </div>
+                            <div className="h-0.5 bg-[#1a1a1a] rounded-full overflow-hidden">
+                              <motion.div className="h-full rounded-full bg-[#ff4e00]"
+                                animate={processStage === 'transcribing'
+                                  ? { width: ['15%', '88%'], transition: { duration: 28, ease: 'linear' } }
+                                  : processStage === 'uploading'
+                                  ? { width: '15%', transition: { duration: 0.4 } }
+                                  : { width: '5%', transition: { duration: 0.3 } }
+                                }
+                              />
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+
+                      <div className="flex gap-2" dir="ltr">
+                        <motion.button whileHover={{ scale: isTranscribing ? 1 : 1.01 }} whileTap={{ scale: 0.98 }}
+                          onClick={() => transcribeAudio()} disabled={isTranscribing}
+                          className="flex-1 py-3.5 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.15em] uppercase shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5"
+                        >
+                          TRANSCRIBE AUDIO
+                        </motion.button>
+                        <AnimatePresence>
+                          {isTranscribing && (
+                            <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+                              onClick={cancelTranscription}
+                              className="px-4 py-3.5 rounded-xl bg-[#1a1a1c] border border-[#ff4e00]/30 text-[#ff4e00] text-xs font-bold uppercase tracking-wider hover:bg-[#ff4e00]/10 transition-all flex items-center gap-1.5"
+                            >
+                              <X size={14} />ڕاگرتن
+                            </motion.button>
+                          )}
+                        </AnimatePresence>
+                      </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
