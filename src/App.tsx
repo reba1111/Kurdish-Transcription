@@ -681,48 +681,6 @@ export default function App() {
                                   </div>
                                 )}
 
-                                {/* Dual volume sliders */}
-                                <div className="space-y-3" dir="ltr">
-                                  <label className="text-[9px] uppercase tracking-widest text-[#444] font-bold block">ڤۆڵیومی دەنگ</label>
-
-                                  {/* Start volume */}
-                                  <div className="space-y-1.5">
-                                    <div className="flex justify-between items-center">
-                                      <span className="text-[9px] text-[#3b82f6] font-bold uppercase tracking-wider">▶ دەستپێک</span>
-                                      <span className="text-[10px] font-mono text-[#3b82f6]">{Math.round(volStart * 100)}%</span>
-                                    </div>
-                                    <div className="relative h-5 flex items-center">
-                                      <div className="absolute inset-x-0 h-1.5 rounded-full bg-[#1f2937]" />
-                                      <div className="absolute h-1.5 rounded-full bg-[#3b82f6]/40"
-                                        style={{ left: 0, width: `${((volStart - 0.1) / 2.9) * 100}%` }} />
-                                      <input type="range" min={0.1} max={3} step={0.05} value={volStart}
-                                        onChange={e => setVolStart(parseFloat(e.target.value))}
-                                        className="relative w-full h-1.5 rounded-full appearance-none cursor-pointer bg-transparent [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#3b82f6] [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(59,130,246,0.6)] [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/20 [&::-webkit-slider-thumb]:cursor-grab [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-[#3b82f6] [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-grab"
-                                      />
-                                    </div>
-                                  </div>
-
-                                  {/* End volume */}
-                                  <div className="space-y-1.5">
-                                    <div className="flex justify-between items-center">
-                                      <span className="text-[9px] text-[#22d3ee] font-bold uppercase tracking-wider">■ کۆتایی</span>
-                                      <span className="text-[10px] font-mono text-[#22d3ee]">{Math.round(volEnd * 100)}%</span>
-                                    </div>
-                                    <div className="relative h-5 flex items-center">
-                                      <div className="absolute inset-x-0 h-1.5 rounded-full bg-[#1f2937]" />
-                                      <div className="absolute h-1.5 rounded-full bg-[#22d3ee]/40"
-                                        style={{ left: 0, width: `${((volEnd - 0.1) / 2.9) * 100}%` }} />
-                                      <input type="range" min={0.1} max={3} step={0.05} value={volEnd}
-                                        onChange={e => setVolEnd(parseFloat(e.target.value))}
-                                        className="relative w-full h-1.5 rounded-full appearance-none cursor-pointer bg-transparent [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#22d3ee] [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(34,211,238,0.6)] [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/20 [&::-webkit-slider-thumb]:cursor-grab [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-[#22d3ee] [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-grab"
-                                      />
-                                    </div>
-                                  </div>
-
-                                  <div className="flex justify-between text-[9px] text-[#2a2a2a]">
-                                    <span>10%</span><span>100%</span><span>300%</span>
-                                  </div>
-                                </div>
 
                                 {/* Transcribe range button */}
                                 <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
