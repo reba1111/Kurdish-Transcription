@@ -72,6 +72,8 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
       finalMimeType = "audio/mpeg";
       finalFileName = "compressed.mp3";
 
+      console.log(`[Audio] Original Size: ${(req.file.buffer.length / 1024 / 1024).toFixed(2)}MB, Compressed: ${(finalBuffer.length / 1024 / 1024).toFixed(2)}MB`);
+
       try {
         fs.unlinkSync(tempInput);
         fs.unlinkSync(tempOutput);
@@ -232,11 +234,16 @@ async function startServer() {
     });
   }
 
-  const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-
-  server.setTimeout(600000);
+  if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+    const server = app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+    server.setTimeout(600000);
+  }
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;

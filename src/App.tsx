@@ -139,8 +139,14 @@ export default function App() {
         body: formData,
       });
 
+      if (response.status === 404) {
+        setError("هەڵەی 404: ڕاژەکە (API) نەدۆزرایەوە. ئەگەر ئەپەکەت لەسەر Vercel بڵاوکردۆتەوە، دەبێت بزانیت کە باکەندی ئەپەکە (server.ts) لەسەر Vercel بە شێوەیەکی ئۆتۆماتیکی کار ناکات.");
+        setIsTranscribing(false);
+        return;
+      }
+
       const contentType = response.headers.get("content-type");
-      if (contentType && contentType.includes("text/html")) {
+      if (response.status !== 404 && contentType && contentType.includes("text/html") && !response.ok) {
         setCookieError(true);
         setIsTranscribing(false);
         return;
@@ -384,7 +390,14 @@ export default function App() {
                       <div className="flex items-center justify-between w-full bg-[#1a1a1c] px-4 py-3 rounded-xl border border-[#ffffff10]">
                         <div className="flex items-center gap-3">
                           <FileAudio size={18} className="text-[#ff4e00]" />
-                          <span className="text-[11px] font-mono tracking-wider text-[#e0e0e0] uppercase" dir="ltr">AUDIO_INPUT.WAV</span>
+                          <div className="flex flex-col">
+                            <span className="text-[11px] font-mono tracking-wider text-[#e0e0e0] uppercase" dir="ltr">AUDIO_INPUT.WAV</span>
+                            {audioBlob && (
+                              <span className="text-[10px] font-mono tracking-wider text-[#888]" dir="ltr">
+                                {(audioBlob.size / (1024 * 1024)).toFixed(2)} MB
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <button onClick={reset} className="text-[#888] hover:text-[#ff4e00] transition-colors p-1">
                           <Trash2 size={16} />
@@ -408,7 +421,7 @@ export default function App() {
                         {isTranscribing ? (
                           <>
                             <Loader2 className="animate-spin" size={18} />
-                            PROCESSING...
+                            {shouldCompress ? "COMPRESSING & PROCESSING..." : "PROCESSING..."}
                           </>
                         ) : (
                           "TRANSCRIBE AUDIO"
