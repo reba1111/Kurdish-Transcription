@@ -614,11 +614,19 @@ export default function App() {
                 >
                   {/* User info */}
                   <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
-                    className="w-full text-right px-4 py-3 transition-colors hover:bg-[#ff4e00]/05"
+                    className="w-full flex items-center gap-3 px-4 py-3 transition-colors hover:bg-[#ff4e00]/05"
                     style={{ borderBottom: '1px solid var(--border-soft)' }}
                   >
-                    <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{user.displayName || "کاربەر"}</p>
-                    <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
+                    {user.photoURL
+                      ? <img src={user.photoURL} className="w-10 h-10 rounded-full ring-2 ring-[#ff4e00]/20 shrink-0" alt="" />
+                      : <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#ff4e00] to-[#ff7a40] flex items-center justify-center text-white text-sm font-bold shrink-0">
+                          {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                        </div>
+                    }
+                    <div className="text-right min-w-0">
+                      <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{user.displayName || "کاربەر"}</p>
+                      <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
+                    </div>
                   </button>
 
                   {/* Mobile tabs inside menu */}
