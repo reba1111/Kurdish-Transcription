@@ -47,11 +47,8 @@ export default function App() {
   const [showSummary, setShowSummary] = useState(false);
   const [isExportingSubtitles, setIsExportingSubtitles] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
-  const [rangeStart, setRangeStart] = useState('');
-  const [rangeEnd, setRangeEnd] = useState('');
   const [processStage, setProcessStage] = useState<'idle'|'compressing'|'uploading'|'transcribing'>('idle');
   const abortControllerRef = useRef<AbortController | null>(null);
-  const [showRangeEditor, setShowRangeEditor] = useState(false);
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
 
@@ -437,7 +434,7 @@ export default function App() {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioBlob(null); setAudioUrl(null); setTranscription(""); setError(null);
     setSummary(''); setShowSummary(false);
-    setAudioDuration(0); setRangeStart(''); setRangeEnd(''); setShowRangeEditor(false);
+    setAudioDuration(0);
     setSliderMin(0); setSliderMax(100); setCurrentPct(0); setIsPlaying(false);
   };
 
@@ -472,39 +469,6 @@ export default function App() {
         const srcData = decoded.getChannelData(ch).subarray(startSample, endSample);
         const dst = sliced.getChannelData(ch);
         for (let i = 0; i < frameCount; i++) dst[i] = srcData[i];
-      }
-      audioCtx.close();
-      const wavBlob = audioBufferToWavBlob(sliced);
-      await runTranscription(wavBlob, targetLanguage, false);
-    } catch (err: any) {
-      setError(err.message || "هەڵەیەک ڕوویدا لە کاتی ئیدیتکردنی دەنگ.");
-      setIsTranscribing(false);
-      setProcessStage('idle');
-    }
-  };
-
-  const transcribeRange = async () => {
-    if (!audioBlob) return;
-    const start = parseMMSS(rangeStart);
-    const end = parseMMSS(rangeEnd) || audioDuration;
-    if (start >= end) { setError("کاتی دەستپێکردن پێویستە کەمتر بێت لە کاتی کۆتایی."); return; }
-
-    setProcessStage('compressing');
-    try {
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      const audioCtx = new AudioContext();
-      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-      const sampleRate = decoded.sampleRate;
-      const startSample = Math.floor(start * sampleRate);
-      const endSample = Math.min(Math.floor(end * sampleRate), decoded.length);
-      const frameCount = endSample - startSample;
-      const sliced = audioCtx.createBuffer(decoded.numberOfChannels, frameCount, sampleRate);
-      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
-        const srcData = decoded.getChannelData(ch).subarray(startSample, endSample);
-        const dst = sliced.getChannelData(ch);
-        for (let i = 0; i < frameCount; i++) {
-          dst[i] = srcData[i];
-        }
       }
       audioCtx.close();
       const wavBlob = audioBufferToWavBlob(sliced);
@@ -722,7 +686,7 @@ export default function App() {
                           <audio ref={audioElRef} src={audioUrl}
                             onLoadedMetadata={e => {
                               const d = (e.target as HTMLAudioElement).duration;
-                              if (isFinite(d)) { setAudioDuration(d); setRangeEnd(fmtMMSS(d)); }
+                              if (isFinite(d)) { setAudioDuration(d); }
                             }}
                           />
 
@@ -835,71 +799,6 @@ export default function App() {
                           )}
                         </div>
                       )}
-
-                      {/* ── RANGE EDITOR ── */}
-                      <div className="rounded-xl border border-[#ffffff08] bg-[#0a0a0b] overflow-hidden">
-                        <button onClick={() => setShowRangeEditor(p => !p)}
-                          className="w-full flex items-center justify-between px-4 py-2.5 text-[10px] uppercase tracking-widest text-[#555] hover:text-[#aaa] transition-colors font-bold"
-                        >
-                          <span className="flex items-center gap-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6]" />
-                            ئیدیتی بەشێکی دیاریکراو
-                          </span>
-                          <ChevronDown size={12} className={`transition-transform ${showRangeEditor ? 'rotate-180' : ''}`} />
-                        </button>
-                        <AnimatePresence>
-                          {showRangeEditor && (
-                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-                              className="border-t border-[#ffffff08] overflow-hidden"
-                            >
-                              <div className="p-4 space-y-4">
-                                {/* Start / End inputs */}
-                                <div className="grid grid-cols-2 gap-3" dir="ltr">
-                                  <div className="flex flex-col gap-1.5">
-                                    <label className="text-[9px] uppercase tracking-widest text-[#444] font-bold">دەستپێک (MM:SS)</label>
-                                    <input type="text" value={rangeStart} onChange={e => setRangeStart(e.target.value)}
-                                      placeholder="00:00"
-                                      className="bg-[#141416] border border-[#ffffff10] rounded-lg px-3 py-2 text-sm font-mono text-white outline-none focus:border-[#3b82f6]/60 transition-colors placeholder-[#333]"
-                                    />
-                                  </div>
-                                  <div className="flex flex-col gap-1.5">
-                                    <label className="text-[9px] uppercase tracking-widest text-[#444] font-bold">
-                                      کۆتایی (MM:SS){audioDuration > 0 && <span className="text-[#333] ml-1">/ {fmtMMSS(audioDuration)}</span>}
-                                    </label>
-                                    <input type="text" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)}
-                                      placeholder={audioDuration > 0 ? fmtMMSS(audioDuration) : '00:00'}
-                                      className="bg-[#141416] border border-[#ffffff10] rounded-lg px-3 py-2 text-sm font-mono text-white outline-none focus:border-[#3b82f6]/60 transition-colors placeholder-[#333]"
-                                    />
-                                  </div>
-                                </div>
-
-                                {/* Quick-set current time button */}
-                                {audioElRef.current && (
-                                  <div className="flex gap-2" dir="ltr">
-                                    <button onClick={() => setRangeStart(fmtMMSS(audioElRef.current!.currentTime))}
-                                      className="flex-1 py-1.5 text-[10px] uppercase tracking-wider bg-[#141416] border border-[#ffffff08] rounded-lg text-[#555] hover:text-[#3b82f6] hover:border-[#3b82f6]/30 transition-colors"
-                                    >▶ Set Start</button>
-                                    <button onClick={() => setRangeEnd(fmtMMSS(audioElRef.current!.currentTime))}
-                                      className="flex-1 py-1.5 text-[10px] uppercase tracking-wider bg-[#141416] border border-[#ffffff08] rounded-lg text-[#555] hover:text-[#3b82f6] hover:border-[#3b82f6]/30 transition-colors"
-                                    >■ Set End</button>
-                                  </div>
-                                )}
-
-
-                                {/* Transcribe range button */}
-                                <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                                  onClick={transcribeRange} disabled={isTranscribing || !rangeStart}
-                                  className="w-full py-3 rounded-xl bg-[#3b82f6] text-white font-bold text-xs tracking-[0.15em] uppercase shadow-[0_0_20px_rgba(59,130,246,0.2)] hover:bg-[#2563eb] hover:shadow-[0_0_30px_rgba(59,130,246,0.35)] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2.5"
-                                >
-                                  {isTranscribing
-                                    ? <><Loader2 className="animate-spin" size={14} />PROCESSING RANGE...</>
-                                    : <>TRANSCRIBE {rangeStart && rangeEnd ? `${rangeStart} → ${rangeEnd}` : 'SELECTED RANGE'}</>}
-                                </motion.button>
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
 
                       {/* Progress bar */}
                       <AnimatePresence>
