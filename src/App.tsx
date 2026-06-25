@@ -55,14 +55,6 @@ export default function App() {
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
 
-  // A-B loop state
-  const [abPoint, setAbPoint] = useState<number | null>(null);
-  const [bbPoint, setBbPoint] = useState<number | null>(null);
-  const [isLooping, setIsLooping] = useState(false);
-  const [playerTime, setPlayerTime] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const progressBarRef = useRef<HTMLDivElement>(null);
-
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
@@ -71,68 +63,6 @@ export default function App() {
     const unsub = onAuthStateChanged(auth, u => setUser(u));
     return unsub;
   }, []);
-
-  // A-B loop: sync playerTime and enforce loop bounds
-  useEffect(() => {
-    const el = audioElRef.current;
-    if (!el) return;
-    const onTime = () => {
-      setPlayerTime(el.currentTime);
-      if (isLooping && abPoint !== null && bbPoint !== null && el.currentTime >= bbPoint) {
-        el.currentTime = abPoint;
-      }
-    };
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    const onEnded = () => {
-      setIsPlaying(false);
-      if (isLooping && abPoint !== null && bbPoint !== null) {
-        el.currentTime = abPoint;
-        el.play();
-      }
-    };
-    el.addEventListener('timeupdate', onTime);
-    el.addEventListener('play', onPlay);
-    el.addEventListener('pause', onPause);
-    el.addEventListener('ended', onEnded);
-    return () => {
-      el.removeEventListener('timeupdate', onTime);
-      el.removeEventListener('play', onPlay);
-      el.removeEventListener('pause', onPause);
-      el.removeEventListener('ended', onEnded);
-    };
-  }, [isLooping, abPoint, bbPoint]);
-
-  // A-B loop: sync playerTime and enforce loop bounds
-  useEffect(() => {
-    const el = audioElRef.current;
-    if (!el) return;
-    const onTime = () => {
-      setPlayerTime(el.currentTime);
-      if (isLooping && abPoint !== null && bbPoint !== null && el.currentTime >= bbPoint) {
-        el.currentTime = abPoint;
-      }
-    };
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    const onEnded = () => {
-      setIsPlaying(false);
-      if (isLooping && abPoint !== null && bbPoint !== null) {
-        el.currentTime = abPoint;
-        el.play();
-      }
-    };
-    el.addEventListener('timeupdate', onTime);
-    el.addEventListener('play', onPlay);
-    el.addEventListener('pause', onPause);
-    el.addEventListener('ended', onEnded);
-    return () => {
-      el.removeEventListener('timeupdate', onTime);
-      el.removeEventListener('play', onPlay);
-      el.removeEventListener('pause', onPause);
-      el.removeEventListener('ended', onEnded);
-    };
-  }, [isLooping, abPoint, bbPoint]);
 
   // Load history from Firestore when user logs in
   useEffect(() => {
@@ -440,46 +370,6 @@ export default function App() {
     setAudioBlob(null); setAudioUrl(null); setTranscription(""); setError(null);
     setSummary(''); setShowSummary(false);
     setAudioDuration(0); setRangeStart(''); setRangeEnd(''); setShowRangeEditor(false);
-    setAbPoint(null); setBbPoint(null); setIsLooping(false); setPlayerTime(0); setIsPlaying(false);
-  };
-
-  const seekTo = (pct: number) => {
-    const el = audioElRef.current;
-    if (!el || !audioDuration) return;
-    el.currentTime = pct * audioDuration;
-  };
-
-  const togglePlay = () => {
-    const el = audioElRef.current;
-    if (!el) return;
-    if (el.paused) {
-      if (isLooping && abPoint !== null && (el.currentTime < abPoint || (bbPoint !== null && el.currentTime >= bbPoint))) {
-        el.currentTime = abPoint;
-      }
-      el.play();
-    } else {
-      el.pause();
-    }
-  };
-
-  const setA = () => {
-    const el = audioElRef.current;
-    if (!el) return;
-    const t = el.currentTime;
-    setAbPoint(t);
-    if (bbPoint !== null && t >= bbPoint) setBbPoint(null);
-  };
-
-  const setB = () => {
-    const el = audioElRef.current;
-    if (!el) return;
-    const t = el.currentTime;
-    setBbPoint(t);
-    if (abPoint !== null && t <= abPoint) setAbPoint(null);
-  };
-
-  const clearAB = () => {
-    setAbPoint(null); setBbPoint(null); setIsLooping(false);
   };
 
   const parseMMSS = (val: string): number => {
@@ -729,88 +619,14 @@ export default function App() {
                         <button onClick={reset} className="text-[#555] hover:text-[#ff4e00] transition-colors p-1.5 shrink-0"><Trash2 size={15} /></button>
                       </div>
                       {audioUrl && (
-                        <div className="bg-[#0a0a0b] rounded-xl border border-[#ffffff08] overflow-hidden p-3 space-y-3" dir="ltr">
-                          {/* Hidden audio element */}
-                          <audio ref={audioElRef} src={audioUrl}
+                        <div className="bg-[#0a0a0b] rounded-xl border border-[#ffffff08] overflow-hidden p-3">
+                          <audio ref={audioElRef} src={audioUrl} controls
+                            className="w-full"
                             onLoadedMetadata={e => {
                               const d = (e.target as HTMLAudioElement).duration;
                               if (isFinite(d)) { setAudioDuration(d); setRangeEnd(fmtMMSS(d)); }
                             }}
                           />
-
-                          {/* Custom progress bar */}
-                          <div
-                            ref={progressBarRef}
-                            className="relative h-8 flex items-center cursor-pointer mt-2"
-                            onClick={e => {
-                              const rect = progressBarRef.current!.getBoundingClientRect();
-                              seekTo((e.clientX - rect.left) / rect.width);
-                            }}
-                          >
-                            {/* Track */}
-                            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-[#ffffff10] rounded-full" />
-                            {/* A-B highlight */}
-                            {abPoint !== null && bbPoint !== null && audioDuration > 0 && (
-                              <div
-                                className="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-[#ff4e00]/40 border-x border-[#ff4e00]/60"
-                                style={{ left: `${(abPoint / audioDuration) * 100}%`, width: `${((bbPoint - abPoint) / audioDuration) * 100}%` }}
-                              />
-                            )}
-                            {/* Played portion */}
-                            {audioDuration > 0 && (
-                              <div className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-white/30 rounded-full pointer-events-none" style={{ width: `${(playerTime / audioDuration) * 100}%` }} />
-                            )}
-                            {/* A marker */}
-                            {abPoint !== null && audioDuration > 0 && (
-                              <div className="absolute top-0 bottom-0 flex flex-col items-center pointer-events-none" style={{ left: `${(abPoint / audioDuration) * 100}%`, transform: 'translateX(-50%)' }}>
-                                <div className="w-0.5 h-full bg-[#ff4e00]" />
-                                <span className="absolute -top-4 text-[9px] font-bold text-[#ff4e00] bg-[#0a0a0b] px-0.5">A</span>
-                              </div>
-                            )}
-                            {/* B marker */}
-                            {bbPoint !== null && audioDuration > 0 && (
-                              <div className="absolute top-0 bottom-0 flex flex-col items-center pointer-events-none" style={{ left: `${(bbPoint / audioDuration) * 100}%`, transform: 'translateX(-50%)' }}>
-                                <div className="w-0.5 h-full bg-[#ff4e00]" />
-                                <span className="absolute -top-4 text-[9px] font-bold text-[#ff4e00] bg-[#0a0a0b] px-0.5">B</span>
-                              </div>
-                            )}
-                            {/* White scrubber */}
-                            {audioDuration > 0 && (
-                              <div className="absolute top-1/2 w-4 h-4 bg-white rounded-full shadow-lg shadow-black/50 pointer-events-none" style={{ left: `${(playerTime / audioDuration) * 100}%`, transform: 'translate(-50%, -50%)' }} />
-                            )}
-                          </div>
-
-                          {/* Time display */}
-                          <div className="flex items-center justify-between text-[10px] font-mono text-[#555]">
-                            <span>{fmtMMSS(playerTime)}</span>
-                            <span>{audioDuration > 0 ? fmtMMSS(audioDuration) : '--:--'}</span>
-                          </div>
-
-                          {/* Controls */}
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <button onClick={togglePlay} className="w-9 h-9 flex items-center justify-center rounded-full bg-white text-[#0a0a0b] hover:bg-[#e0e0e0] transition-colors shrink-0 shadow">
-                              {isPlaying
-                                ? <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                                : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>}
-                            </button>
-                            <button onClick={setA} className={`px-3 h-8 rounded-lg text-[11px] font-bold tracking-wider border transition-colors ${abPoint !== null ? 'bg-[#ff4e00] border-[#ff4e00] text-white' : 'bg-transparent border-[#ffffff15] text-[#888] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}>
-                              {abPoint !== null ? `A: ${fmtMMSS(abPoint)}` : 'Set A'}
-                            </button>
-                            <button onClick={setB} className={`px-3 h-8 rounded-lg text-[11px] font-bold tracking-wider border transition-colors ${bbPoint !== null ? 'bg-[#ff4e00] border-[#ff4e00] text-white' : 'bg-transparent border-[#ffffff15] text-[#888] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}>
-                              {bbPoint !== null ? `B: ${fmtMMSS(bbPoint)}` : 'Set B'}
-                            </button>
-                            {abPoint !== null && bbPoint !== null && (
-                              <button
-                                onClick={() => { const next = !isLooping; setIsLooping(next); if (next) { const el = audioElRef.current; if (el) { el.currentTime = abPoint!; el.play(); } } }}
-                                className={`px-3 h-8 rounded-lg text-[11px] font-bold tracking-wider border transition-colors ${isLooping ? 'bg-[#22c55e] border-[#22c55e] text-white shadow-[0_0_12px_rgba(34,197,94,0.3)]' : 'bg-transparent border-[#ffffff15] text-[#888] hover:border-[#22c55e]/40 hover:text-[#22c55e]'}`}
-                              >
-                                {isLooping ? '⟳ LOOP ON' : '⟳ LOOP'}
-                              </button>
-                            )}
-                            {(abPoint !== null || bbPoint !== null) && (
-                              <button onClick={clearAB} className="ml-auto text-[#444] hover:text-[#888] transition-colors text-[10px] uppercase tracking-wider">پاک</button>
-                            )}
-                          </div>
                         </div>
                       )}
 
@@ -861,14 +677,6 @@ export default function App() {
                                       className="flex-1 py-1.5 text-[10px] uppercase tracking-wider bg-[#141416] border border-[#ffffff08] rounded-lg text-[#555] hover:text-[#3b82f6] hover:border-[#3b82f6]/30 transition-colors"
                                     >■ Set End</button>
                                   </div>
-                                )}
-                                {/* Sync from A-B markers */}
-                                {(abPoint !== null || bbPoint !== null) && (
-                                  <button
-                                    onClick={() => { if (abPoint !== null) setRangeStart(fmtMMSS(abPoint)); if (bbPoint !== null) setRangeEnd(fmtMMSS(bbPoint)); }}
-                                    className="w-full py-1.5 text-[10px] uppercase tracking-wider bg-[#141416] border border-[#ff4e00]/20 rounded-lg text-[#ff4e00]/70 hover:text-[#ff4e00] hover:border-[#ff4e00]/40 transition-colors"
-                                    dir="ltr"
-                                  >← A-B بۆ Range ببە</button>
                                 )}
 
 
