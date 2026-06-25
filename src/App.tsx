@@ -544,7 +544,7 @@ export default function App() {
     <div className="min-h-screen font-sans selection:bg-[#ff4e00]/30" style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }} dir="rtl">
 
       {/* ── HEADER ── */}
-      <header className="sticky top-0 z-30 backdrop-blur-md border-b" style={{ background: 'var(--bg-base)', borderColor: 'var(--border)' }}>
+      <header className="sticky top-0 z-30 border-b" style={{ background: 'var(--bg-base)', borderColor: 'var(--border)' }}>
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-3">
 
           {/* Logo */}
@@ -637,7 +637,7 @@ export default function App() {
       </header>
 
       {/* ── MOBILE BOTTOM NAV ── */}
-      <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-30 border-t flex" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
+      <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-30 border-t flex safe-area-bottom" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
         {([
           ['transcribe', Mic, 'نووسینەوە'],
           ['library', History, 'کتێبخانە'],
