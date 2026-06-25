@@ -710,7 +710,7 @@ export default function App() {
                           {/* Custom progress bar */}
                           <div
                             ref={progressBarRef}
-                            className="relative h-8 flex items-center cursor-pointer group"
+                            className="relative h-8 flex items-center cursor-pointer mt-2"
                             onClick={e => {
                               const rect = progressBarRef.current!.getBoundingClientRect();
                               seekTo((e.clientX - rect.left) / rect.width);
@@ -741,7 +741,7 @@ export default function App() {
                             {/* A marker */}
                             {abPoint !== null && audioDuration > 0 && (
                               <div
-                                className="absolute top-0 bottom-0 flex flex-col items-center"
+                                className="absolute top-0 bottom-0 flex flex-col items-center pointer-events-none"
                                 style={{ left: `${(abPoint / audioDuration) * 100}%`, transform: 'translateX(-50%)' }}
                               >
                                 <div className="w-0.5 h-full bg-[#ff4e00]" />
@@ -752,7 +752,7 @@ export default function App() {
                             {/* B marker */}
                             {bbPoint !== null && audioDuration > 0 && (
                               <div
-                                className="absolute top-0 bottom-0 flex flex-col items-center"
+                                className="absolute top-0 bottom-0 flex flex-col items-center pointer-events-none"
                                 style={{ left: `${(bbPoint / audioDuration) * 100}%`, transform: 'translateX(-50%)' }}
                               >
                                 <div className="w-0.5 h-full bg-[#ff4e00]" />
@@ -760,10 +760,10 @@ export default function App() {
                               </div>
                             )}
 
-                            {/* Scrubber */}
+                            {/* White scrubber dot */}
                             {audioDuration > 0 && (
                               <div
-                                className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg shadow-black/50 pointer-events-none transition-[left]"
+                                className="absolute top-1/2 w-4 h-4 bg-white rounded-full shadow-lg shadow-black/50 pointer-events-none"
                                 style={{ left: `${(playerTime / audioDuration) * 100}%`, transform: 'translate(-50%, -50%)' }}
                               />
                             )}
@@ -776,7 +776,7 @@ export default function App() {
                           </div>
 
                           {/* Controls row */}
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             {/* Play/Pause */}
                             <button
                               onClick={togglePlay}
@@ -788,7 +788,7 @@ export default function App() {
                               }
                             </button>
 
-                            {/* A button */}
+                            {/* Set A */}
                             <button
                               onClick={setA}
                               className={`px-3 h-8 rounded-lg text-[11px] font-bold tracking-wider border transition-colors ${abPoint !== null ? 'bg-[#ff4e00] border-[#ff4e00] text-white' : 'bg-transparent border-[#ffffff15] text-[#888] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
@@ -796,7 +796,7 @@ export default function App() {
                               {abPoint !== null ? `A: ${fmtMMSS(abPoint)}` : 'Set A'}
                             </button>
 
-                            {/* B button */}
+                            {/* Set B */}
                             <button
                               onClick={setB}
                               className={`px-3 h-8 rounded-lg text-[11px] font-bold tracking-wider border transition-colors ${bbPoint !== null ? 'bg-[#ff4e00] border-[#ff4e00] text-white' : 'bg-transparent border-[#ffffff15] text-[#888] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
@@ -804,7 +804,7 @@ export default function App() {
                               {bbPoint !== null ? `B: ${fmtMMSS(bbPoint)}` : 'Set B'}
                             </button>
 
-                            {/* Loop toggle — only enabled when both A and B set */}
+                            {/* Loop toggle */}
                             {abPoint !== null && bbPoint !== null && (
                               <button
                                 onClick={() => {
@@ -874,16 +874,10 @@ export default function App() {
                                 {/* Quick-set current time button */}
                                 {audioElRef.current && (
                                   <div className="flex gap-2" dir="ltr">
-                                    <button onClick={() => {
-                                      const t = audioElRef.current!.currentTime;
-                                      setRangeStart(fmtMMSS(t));
-                                    }}
+                                    <button onClick={() => setRangeStart(fmtMMSS(audioElRef.current!.currentTime))}
                                       className="flex-1 py-1.5 text-[10px] uppercase tracking-wider bg-[#141416] border border-[#ffffff08] rounded-lg text-[#555] hover:text-[#3b82f6] hover:border-[#3b82f6]/30 transition-colors"
                                     >▶ Set Start</button>
-                                    <button onClick={() => {
-                                      const t = audioElRef.current!.currentTime;
-                                      setRangeEnd(fmtMMSS(t));
-                                    }}
+                                    <button onClick={() => setRangeEnd(fmtMMSS(audioElRef.current!.currentTime))}
                                       className="flex-1 py-1.5 text-[10px] uppercase tracking-wider bg-[#141416] border border-[#ffffff08] rounded-lg text-[#555] hover:text-[#3b82f6] hover:border-[#3b82f6]/30 transition-colors"
                                     >■ Set End</button>
                                   </div>
@@ -898,7 +892,7 @@ export default function App() {
                                     className="w-full py-1.5 text-[10px] uppercase tracking-wider bg-[#141416] border border-[#ff4e00]/20 rounded-lg text-[#ff4e00]/70 hover:text-[#ff4e00] hover:border-[#ff4e00]/40 transition-colors"
                                     dir="ltr"
                                   >
-                                    ← A-B Range بۆ Range Editor ببە
+                                    ← A-B بۆ Range ببە
                                   </button>
                                 )}
 
