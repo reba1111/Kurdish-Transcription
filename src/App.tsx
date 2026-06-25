@@ -576,26 +576,18 @@ export default function App() {
           {/* Right side: User menu (with theme inside) */}
           <div className="relative shrink-0" dir="ltr">
             <button onClick={() => setShowUserMenu(p => !p)}
-              className="flex items-center rounded-xl overflow-hidden transition-colors"
+              className="flex items-center gap-2 rounded-xl px-2.5 py-1.5 transition-colors"
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
             >
-              {/* Avatar + Name */}
-              <div className="flex items-center gap-2 px-2.5 py-1.5">
-                {user.photoURL
-                  ? <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="" />
-                  : <div className="w-6 h-6 rounded-full bg-[#ff4e00] flex items-center justify-center text-white text-[10px] font-bold">
-                      {(user.displayName || user.email || 'U')[0].toUpperCase()}
-                    </div>
-                }
-                <span className="hidden sm:block text-xs max-w-[80px] truncate" style={{ color: 'var(--text-muted)' }}>
-                  {user.displayName || user.email?.split('@')[0]}
-                </span>
-              </div>
-              {/* Divider + Theme icon */}
-              <div className="flex items-center justify-center w-8 h-full self-stretch border-l px-1.5"
-                style={{ borderColor: 'var(--border)' }}>
-                {theme === 'dark' ? <Moon size={13} style={{ color: 'var(--text-muted)' }} /> : theme === 'light' ? <Sun size={13} style={{ color: 'var(--text-muted)' }} /> : <Monitor size={13} style={{ color: 'var(--text-muted)' }} />}
-              </div>
+              {user.photoURL
+                ? <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="" />
+                : <div className="w-6 h-6 rounded-full bg-[#ff4e00] flex items-center justify-center text-white text-[10px] font-bold">
+                    {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                  </div>
+              }
+              <span className="hidden sm:block text-xs max-w-[80px] truncate" style={{ color: 'var(--text-muted)' }}>
+                {user.displayName || user.email?.split('@')[0]}
+              </span>
             </button>
 
             <AnimatePresence>
