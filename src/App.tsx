@@ -573,65 +573,75 @@ export default function App() {
             ))}
           </nav>
 
-          {/* Right side: Theme + User */}
-          <div className="flex items-center gap-2" dir="ltr">
-            {/* Theme toggle */}
-            <div className="flex gap-0.5 rounded-lg p-1" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-              {([['dark', Moon], ['light', Sun], ['system', Monitor]] as const).map(([t, Icon]) => (
-                <button key={t} onClick={() => setTheme(t)}
-                  className={`p-1.5 rounded-md transition-all ${theme === t ? 'bg-[#ff4e00] text-white' : 'hover:text-white'}`}
-                  style={theme !== t ? { color: 'var(--text-dim)' } : undefined}
-                >
-                  <Icon size={13} />
-                </button>
-              ))}
-            </div>
+          {/* Right side: User menu (with theme inside) */}
+          <div className="relative shrink-0" dir="ltr">
+            <button onClick={() => setShowUserMenu(p => !p)}
+              className="flex items-center gap-2 rounded-xl px-2.5 py-1.5 transition-colors"
+              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+            >
+              {/* Theme icon on left */}
+              {theme === 'dark' ? <Moon size={14} style={{ color: 'var(--text-muted)' }} /> : theme === 'light' ? <Sun size={14} style={{ color: 'var(--text-muted)' }} /> : <Monitor size={14} style={{ color: 'var(--text-muted)' }} />}
+              {/* Avatar */}
+              {user.photoURL
+                ? <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="" />
+                : <div className="w-6 h-6 rounded-full bg-[#ff4e00] flex items-center justify-center text-white text-[10px] font-bold">
+                    {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                  </div>
+              }
+              <span className="hidden sm:block text-xs max-w-[80px] truncate" style={{ color: 'var(--text-muted)' }}>
+                {user.displayName || user.email?.split('@')[0]}
+              </span>
+            </button>
 
-            {/* User menu */}
-            <div className="relative shrink-0">
-              <button onClick={() => setShowUserMenu(p => !p)}
-                className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors"
-                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
-              >
-                {user.photoURL
-                  ? <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="" />
-                  : <div className="w-6 h-6 rounded-full bg-[#ff4e00] flex items-center justify-center text-white text-[10px] font-bold">
-                      {(user.displayName || user.email || 'U')[0].toUpperCase()}
-                    </div>
-                }
-                <span className="hidden sm:block text-xs max-w-[100px] truncate" style={{ color: 'var(--text-muted)' }}>
-                  {user.displayName || user.email?.split('@')[0]}
-                </span>
-              </button>
-              <AnimatePresence>
-                {showUserMenu && (
-                  <motion.div initial={{ opacity: 0, y: 6, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.97 }}
-                    className="absolute left-0 top-full mt-2 w-52 rounded-xl shadow-2xl overflow-hidden z-50"
-                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+            <AnimatePresence>
+              {showUserMenu && (
+                <motion.div initial={{ opacity: 0, y: 6, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.97 }}
+                  className="absolute left-0 top-full mt-2 w-56 rounded-xl shadow-2xl overflow-hidden z-50"
+                  style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+                >
+                  {/* User info */}
+                  <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
+                    className="w-full text-right px-4 py-3 transition-colors hover:bg-[#ff4e00]/05"
+                    style={{ borderBottom: '1px solid var(--border-soft)' }}
                   >
-                    <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
-                      className="w-full text-right px-4 py-3 transition-colors hover:bg-[#ff4e00]/05"
-                      style={{ borderBottom: '1px solid var(--border-soft)' }}
-                    >
-                      <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{user.displayName || "کاربەر"}</p>
-                      <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
-                    </button>
-                    <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors hover:text-[#ff4e00]"
-                      style={{ color: 'var(--text-muted)' }}
-                    >
-                      <User size={13} /> دەستکاری پرۆفایل
-                    </button>
-                    <button onClick={() => { signOut(auth); setShowUserMenu(false); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors hover:text-[#ff4e00] hover:bg-[#ff4e00]/05"
-                      style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--border-soft)' }}
-                    >
-                      <LogOut size={13} /> دەرچوون
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
+                    <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{user.displayName || "کاربەر"}</p>
+                    <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
+                  </button>
+
+                  {/* Theme selector */}
+                  <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                    <p className="text-[10px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>تیم</p>
+                    <div className="flex gap-1">
+                      {([['dark', Moon, 'تاریک'], ['light', Sun, 'ڕووناک'], ['system', Monitor, 'ئۆتۆ']] as const).map(([t, Icon, label]) => (
+                        <button key={t} onClick={() => setTheme(t)}
+                          className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] transition-all ${theme === t ? 'bg-[#ff4e00] text-white' : 'hover:bg-[#ff4e00]/10'}`}
+                          style={theme !== t ? { color: 'var(--text-muted)', border: '1px solid var(--border)' } : {}}
+                        >
+                          <Icon size={13} />
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Profile */}
+                  <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors hover:text-[#ff4e00]"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    <User size={13} /> دەستکاری پرۆفایل
+                  </button>
+
+                  {/* Logout */}
+                  <button onClick={() => { signOut(auth); setShowUserMenu(false); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors hover:text-[#ff4e00] hover:bg-[#ff4e00]/05"
+                    style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--border-soft)' }}
+                  >
+                    <LogOut size={13} /> دەرچوون
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </header>
