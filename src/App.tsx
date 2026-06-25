@@ -5,12 +5,13 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles } from "lucide-react";
+import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles, Sun, Moon, Monitor } from "lucide-react";
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from "firebase/auth";
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import AuthPage from "./AuthPage";
 import ProfilePage from "./ProfilePage";
+import { useTheme } from "./useTheme";
 
 type HistoryItem = {
   id: string;
@@ -21,6 +22,7 @@ type HistoryItem = {
 };
 
 export default function App() {
+  const { theme, setTheme } = useTheme();
   const [user, setUser] = useState<FirebaseUser | null | undefined>(undefined); // undefined = loading
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
@@ -539,7 +541,7 @@ export default function App() {
   if (!user) return <AuthPage />;
 
   return (
-    <div className="min-h-screen bg-[#0a0a0b] font-sans text-[#e0e0e0] selection:bg-[#ff4e00]/30" dir="rtl">
+    <div className="min-h-screen font-sans selection:bg-[#ff4e00]/30" style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }} dir="rtl">
 
       {/* ── HEADER ── */}
       <header className="sticky top-0 z-30 bg-[#0a0a0b]/90 backdrop-blur border-b border-[#ffffff10]">
@@ -566,6 +568,17 @@ export default function App() {
               </button>
             ))}
           </nav>
+
+          {/* Theme toggle */}
+          <div className="flex gap-0.5 bg-[#141416] border border-[#ffffff10] rounded-lg p-1 shrink-0" dir="ltr">
+            {([['dark', Moon], ['light', Sun], ['system', Monitor]] as const).map(([t, Icon]) => (
+              <button key={t} onClick={() => setTheme(t)}
+                className={`p-1.5 rounded-md transition-all ${theme === t ? 'bg-[#ff4e00] text-white' : 'text-[#555] hover:text-white'}`}
+              >
+                <Icon size={13} />
+              </button>
+            ))}
+          </div>
 
           {/* User menu */}
           <div className="relative shrink-0" dir="ltr">
