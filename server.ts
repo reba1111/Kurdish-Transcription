@@ -12,7 +12,8 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+dotenv.config({ path: path.resolve(path.dirname(process.argv[1] || ''), '.env') });
 
 const app = express();
 const PORT = 3000;
@@ -205,6 +206,99 @@ Rules:
     } else {
       res.end();
     }
+  }
+});
+
+// API route for subtitle generation (SRT / VTT)
+app.post("/api/subtitles", upload.single("audio"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No audio file provided" });
+    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "Gemini API key not configured" });
+
+    const targetLanguage = req.body.language || 'ku';
+    const format: 'srt' | 'vtt' = req.body.format === 'vtt' ? 'vtt' : 'srt';
+
+    let mimeType = req.file.mimetype.split(';')[0];
+    if (mimeType === 'application/ogg') mimeType = 'audio/ogg';
+    if (mimeType === 'video/webm') mimeType = 'audio/webm';
+    if (mimeType === 'video/mp4') mimeType = 'audio/mp4';
+
+    let finalBuffer = req.file.buffer;
+    let finalMimeType = mimeType;
+
+    const shouldCompress = req.body.compress === "true" || req.file.buffer.length / 1024 / 1024 > 20;
+    if (shouldCompress) {
+      const tempIn = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".tmp");
+      const tempOut = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".mp3");
+      fs.writeFileSync(tempIn, req.file.buffer);
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(tempIn).audioFrequency(16000).audioChannels(1).audioBitrate('32k').toFormat('mp3')
+          .on('end', () => resolve()).on('error', reject).save(tempOut);
+      });
+      finalBuffer = fs.readFileSync(tempOut);
+      finalMimeType = "audio/mpeg";
+      try { fs.unlinkSync(tempIn); fs.unlinkSync(tempOut); } catch {}
+    }
+
+    const langLabel = targetLanguage === 'ar' ? 'Arabic' : 'Kurdish (Sorani)';
+    const srtExample = `1\n00:00:00,000 --> 00:00:03,500\nFirst subtitle line here\n\n2\n00:00:03,500 --> 00:00:07,200\nSecond subtitle line here`;
+    const vttExample = `WEBVTT\n\n00:00:00.000 --> 00:00:03.500\nFirst subtitle line here\n\n00:00:03.500 --> 00:00:07.200\nSecond subtitle line here`;
+
+    const prompt = format === 'srt'
+      ? `You are a professional subtitle editor. Listen to this ${langLabel} audio carefully and produce a complete, accurate SRT subtitle file.\n\nRules:\n- Use REAL timestamps from the audio — listen carefully to when each phrase starts and ends\n- Each subtitle block: max 2 lines, max 42 characters per line\n- Natural break points at sentence/clause boundaries\n- Output ONLY the raw SRT content, nothing else — no markdown, no explanation\n\nSRT format example:\n${srtExample}`
+      : `You are a professional subtitle editor. Listen to this ${langLabel} audio carefully and produce a complete, accurate WebVTT subtitle file.\n\nRules:\n- Use REAL timestamps from the audio — listen carefully to when each phrase starts and ends\n- Each subtitle block: max 2 lines, max 42 characters per line\n- Natural break points at sentence/clause boundaries\n- Output ONLY the raw VTT content starting with WEBVTT, nothing else — no markdown, no explanation\n\nVTT format example:\n${vttExample}`;
+
+    const audioPart = { inlineData: { mimeType: finalMimeType, data: finalBuffer.toString("base64") } };
+
+    const result = await ai.models.generateContent({
+      model: "gemini-2.5-pro",
+      config: { temperature: 0 },
+      contents: [{ parts: [audioPart, { text: prompt }] }],
+    });
+
+    let output = (result.text || "").replace(/```[a-z]*\n?/g, '').replace(/```/g, '').trim();
+
+    // Ensure VTT starts with WEBVTT header
+    if (format === 'vtt' && !output.startsWith('WEBVTT')) {
+      output = 'WEBVTT\n\n' + output;
+    }
+
+    res.setHeader("Content-Type", `text/plain; charset=utf-8`);
+    res.send(output);
+  } catch (error: any) {
+    console.error("Subtitles error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error.message || "Failed to generate subtitles" });
+  }
+});
+
+// API route for text summarization
+app.post("/api/summarize", async (req, res) => {
+  try {
+    const { text, language } = req.body;
+    if (!text?.trim()) return res.status(400).json({ error: "No text provided" });
+    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "GEMINI_API_KEY نەخوێندراوەتەوە — تکایە لە Vercel Dashboard زیادی بکە." });
+
+    const isKurdish = language === 'ku';
+    const prompt = isKurdish
+      ? `تۆ پسپۆڕی کوردی کلاسیکی و ئەدەبی کوردییت. تێکستی خوارەوەی کە لە دەنگەوە گۆڕدراوە بخوێنەرەوە و:\n1. پوختەیەکی کورت (٣-٥ ڕستە) بنووسە کە گرنگترین خاڵەکانی ئەو قسانە لەخۆ بگرێت\n2. خاڵە گرنگەکانی وەک لیستێک دەربهێنە\n\nتێکست:\n${text}\n\nبە ئەم شێوەیە وەڵامبدەرەوە:\n**پوختە:**\n[پوختەکە ئێرە]\n\n**خاڵە گرنگەکان:**\n• [خاڵی یەکەم]\n• [خاڵی دووەم]\n• ...`
+      : `أنت خبير لغوي عربي. اقرأ النص التالي المستخرج من تسجيل صوتي وقم بـ:\n1. كتابة ملخص موجز (3-5 جمل) يغطي أهم النقاط\n2. استخراج النقاط الرئيسية كقائمة\n\nالنص:\n${text}\n\nأجب بهذا الشكل:\n**الملخص:**\n[الملخص هنا]\n\n**النقاط الرئيسية:**\n• [النقطة الأولى]\n• [النقطة الثانية]\n• ...`;
+
+    const responseStream = await ai.models.generateContentStream({
+      model: "gemini-2.5-flash",
+      config: { temperature: 0.3 },
+      contents: [{ parts: [{ text: prompt }] }],
+    });
+
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Transfer-Encoding", "chunked");
+    for await (const chunk of responseStream) {
+      if (chunk.text) res.write(chunk.text);
+    }
+    res.end();
+  } catch (error: any) {
+    console.error("Summarize error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error.message || "Failed to summarize" });
+    else res.end();
   }
 });
 
