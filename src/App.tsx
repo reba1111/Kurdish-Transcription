@@ -1054,7 +1054,7 @@ export default function App() {
               )}
             </AnimatePresence>
           </>
-        ) : (
+        ) : activeTab === 'library' ? (
           /* ── LIBRARY ── */
           <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             className="bg-[#141416] rounded-2xl border border-[#ffffff10] shadow-2xl overflow-hidden"
@@ -1155,11 +1155,9 @@ export default function App() {
               </div>
             )}
           </motion.section>
-        )}
-
-        {activeTab === 'profile' && (
+        ) : activeTab === 'profile' ? (
           <ProfilePage user={user} />
-        )}
+        ) : null}
       </main>
 
       <footer className="max-w-5xl mx-auto px-4 sm:px-6 py-8 flex items-center justify-between text-[#333] font-mono text-[10px] uppercase tracking-widest" dir="ltr">
