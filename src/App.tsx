@@ -576,25 +576,15 @@ export default function App() {
           {/* Right: mobile hamburger + desktop user menu */}
           <div className="flex items-center gap-2" dir="ltr">
 
-            {/* Mobile: avatar + hamburger */}
-            <div className="flex sm:hidden items-center gap-2">
-              {/* Avatar */}
-              {user.photoURL
-                ? <img src={user.photoURL} className="w-8 h-8 rounded-full ring-2 ring-[#ff4e00]/20" alt="" />
-                : <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#ff4e00] to-[#ff7a40] flex items-center justify-center text-white text-xs font-bold">
-                    {(user.displayName || user.email || 'U')[0].toUpperCase()}
-                  </div>
-              }
-              {/* Hamburger */}
-              <button onClick={() => setShowUserMenu(p => !p)}
-                className="flex flex-col gap-1.5 justify-center items-center w-8 h-8 rounded-lg transition-colors"
-                style={{ border: '1px solid var(--border)' }}
-              >
-                <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
-                <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
-                <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
-              </button>
-            </div>
+            {/* Mobile: hamburger only */}
+            <button onClick={() => setShowUserMenu(p => !p)}
+              className="flex sm:hidden flex-col gap-1.5 justify-center items-center w-9 h-9 rounded-lg transition-colors"
+              style={{ border: '1px solid var(--border)' }}
+            >
+              <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
+              <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
+              <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
+            </button>
 
             {/* Desktop: full user button */}
             <div className="relative hidden sm:block shrink-0">
