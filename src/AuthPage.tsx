@@ -70,7 +70,7 @@ export default function AuthPage() {
             <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full -rotate-45" />
           </div>
           <span className="text-xl font-bold tracking-tighter text-white">
-            VOX<span className="text-[#ff4e00]">SCRIPT</span>
+            Kurdish<span className="text-[#ff4e00]">Transcription</span>
           </span>
         </div>
 
