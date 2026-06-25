@@ -531,7 +531,7 @@ export default function App() {
   // Loading state
   if (user === undefined) {
     return (
-      <div className="min-h-screen bg-[#0a0a0b] flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--bg-base)' }}>
         <Loader2 className="animate-spin text-[#ff4e00]" size={32} />
       </div>
     );
@@ -544,7 +544,7 @@ export default function App() {
     <div className="min-h-screen font-sans selection:bg-[#ff4e00]/30" style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }} dir="rtl">
 
       {/* ── HEADER ── */}
-      <header className="sticky top-0 z-30 bg-[#0a0a0b]/90 backdrop-blur border-b border-[#ffffff10]">
+      <header className="sticky top-0 z-30 backdrop-blur border-b" style={{ background: 'var(--bg-base)', borderColor: 'var(--border)' }}>
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-4">
           {/* Logo */}
           <div className="flex items-center gap-2 shrink-0" dir="ltr">
@@ -552,14 +552,15 @@ export default function App() {
               <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full rotate-45 absolute" />
               <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full -rotate-45" />
             </div>
-            <span className="text-lg sm:text-xl font-bold tracking-tighter text-white">Kurdish<span className="text-[#ff4e00]">Transcription</span></span>
+            <span className="text-lg sm:text-xl font-bold tracking-tighter" style={{ color: 'var(--text-primary)' }}>Kurdish<span className="text-[#ff4e00]">Transcription</span></span>
           </div>
 
           {/* Nav */}
-          <nav className="flex gap-1 bg-[#141416] border border-[#ffffff10] rounded-lg p-1" dir="ltr">
+          <nav className="flex gap-1 rounded-lg p-1" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }} dir="ltr">
             {(['transcribe', 'library', 'profile'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
-                className={`px-3 sm:px-4 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'text-[#888] hover:text-white'}`}
+                className={`px-3 sm:px-4 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:text-white'}`}
+                style={activeTab !== tab ? { color: 'var(--text-muted)' } : undefined}
               >
                 {tab === 'transcribe' ? 'Transcribe' : tab === 'library' ? 'Library' : 'پرۆفایل'}
                 {tab === 'library' && history.length > 0 && (
@@ -570,10 +571,11 @@ export default function App() {
           </nav>
 
           {/* Theme toggle */}
-          <div className="flex gap-0.5 bg-[#141416] border border-[#ffffff10] rounded-lg p-1 shrink-0" dir="ltr">
+          <div className="flex gap-0.5 rounded-lg p-1 shrink-0" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }} dir="ltr">
             {([['dark', Moon], ['light', Sun], ['system', Monitor]] as const).map(([t, Icon]) => (
               <button key={t} onClick={() => setTheme(t)}
-                className={`p-1.5 rounded-md transition-all ${theme === t ? 'bg-[#ff4e00] text-white' : 'text-[#555] hover:text-white'}`}
+                className={`p-1.5 rounded-md transition-all ${theme === t ? 'bg-[#ff4e00] text-white' : 'hover:text-white'}`}
+                style={theme !== t ? { color: 'var(--text-dim)' } : undefined}
               >
                 <Icon size={13} />
               </button>
@@ -583,29 +585,33 @@ export default function App() {
           {/* User menu */}
           <div className="relative shrink-0" dir="ltr">
             <button onClick={() => setShowUserMenu(p => !p)}
-              className="flex items-center gap-2 bg-[#141416] border border-[#ffffff10] rounded-lg px-2.5 py-1.5 hover:border-[#ffffff20] transition-colors"
+              className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors"
+              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
             >
               {user.photoURL
                 ? <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="" />
-                : <User size={15} className="text-[#888]" />
+                : <User size={15} style={{ color: 'var(--text-muted)' }} />
               }
-              <span className="hidden sm:block text-xs text-[#888] max-w-[100px] truncate">
+              <span className="hidden sm:block text-xs max-w-[100px] truncate" style={{ color: 'var(--text-muted)' }}>
                 {user.displayName || user.email?.split('@')[0]}
               </span>
             </button>
             <AnimatePresence>
               {showUserMenu && (
                 <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }}
-                  className="absolute left-0 top-full mt-2 w-48 bg-[#141416] border border-[#ffffff12] rounded-xl shadow-2xl overflow-hidden z-50"
+                  className="absolute left-0 top-full mt-2 w-48 rounded-xl shadow-2xl overflow-hidden z-50"
+                  style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
                 >
                   <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
-                    className="w-full text-right px-3 py-2.5 border-b border-[#ffffff08] hover:bg-[#ffffff05] transition-colors"
+                    className="w-full text-right px-3 py-2.5 hover:bg-[#ffffff05] transition-colors"
+                    style={{ borderBottom: '1px solid var(--border-soft)' }}
                   >
-                    <p className="text-xs text-white font-medium truncate">{user.displayName || "کاربەر"}</p>
-                    <p className="text-[10px] text-[#555] truncate">{user.email}</p>
+                    <p className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>{user.displayName || "کاربەر"}</p>
+                    <p className="text-[10px] truncate" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
                   </button>
                   <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-[#888] hover:text-white hover:bg-[#ffffff05] transition-colors"
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs hover:text-white hover:bg-[#ffffff05] transition-colors"
+                    style={{ color: 'var(--text-muted)' }}
                   >
                     <User size={13} />
                     دەستکاری پرۆفایل
@@ -627,12 +633,12 @@ export default function App() {
         {activeTab === 'transcribe' ? (
           <>
             {/* ── CONTROLS ── */}
-            <section className="bg-[#141416] border border-[#ffffff10] rounded-2xl overflow-hidden shadow-2xl">
+            <section className="rounded-2xl overflow-hidden shadow-2xl" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
               <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-[#ffffff08] border-b border-[#ffffff08]">
                 {/* Language */}
                 <div className="p-4 flex flex-col gap-2">
-                  <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold">زمان</span>
-                  <div className="flex bg-[#0a0a0b] p-1 rounded-lg border border-[#ffffff08] relative">
+                  <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>زمان</span>
+                  <div className="flex p-1 rounded-lg relative" style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)' }}>
                     <div className="absolute top-1 bottom-1 w-[calc(50%-4px)] bg-[#ff4e00]/15 border border-[#ff4e00]/30 rounded-md transition-all duration-300"
                       style={{ right: targetLanguage === 'ku' ? '4px' : 'calc(50%)' }} />
                     {(['ku', 'ar'] as const).map(lang => (
@@ -645,30 +651,31 @@ export default function App() {
 
                 {/* Model */}
                 <div className="p-4 flex flex-col gap-2">
-                  <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold">مۆدێل</span>
+                  <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>مۆدێل</span>
                   <div className="relative">
                     <select value={selectedModel} onChange={e => setSelectedModel(e.target.value as any)}
-                      className="w-full bg-[#0a0a0b] border border-[#ffffff08] text-sm font-medium text-white py-2.5 pl-3 pr-8 rounded-lg outline-none cursor-pointer appearance-none" dir="ltr"
+                      className="w-full text-sm font-medium py-2.5 pl-3 pr-8 rounded-lg outline-none cursor-pointer appearance-none"
+                      style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }} dir="ltr"
                     >
                       <option value="gemini-pro" className="bg-[#1a1a1c]">Gemini 2.5 Pro ★</option>
                       <option value="gemini" className="bg-[#1a1a1c]">Gemini 2.5 Flash</option>
                       <option value="gemini-flash2" className="bg-[#1a1a1c]">Gemini 2.0 Flash</option>
                       <option value="scribe" className="bg-[#1a1a1c]">ElevenLabs Scribe</option>
                     </select>
-                    <ChevronDown size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#555] pointer-events-none" />
+                    <ChevronDown size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-dim)' }} />
                   </div>
                 </div>
 
                 {/* Compress */}
                 <div className="p-4 flex flex-col gap-2">
-                  <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold">بچووککردنەوەی قەبارە</span>
-                  <label className="flex items-center gap-3 bg-[#0a0a0b] border border-[#ffffff08] rounded-lg px-3 py-2.5 cursor-pointer hover:border-[#ffffff15] transition-colors h-[42px]">
+                  <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>بچووککردنەوەی قەبارە</span>
+                  <label className="flex items-center gap-3 rounded-lg px-3 py-2.5 cursor-pointer transition-colors h-[42px]" style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)' }}>
                     <div onClick={() => setShouldCompress(p => !p)}
                       className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer shrink-0 ${shouldCompress ? 'bg-[#ff4e00]' : 'bg-[#333]'}`}
                     >
                       <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all duration-200 ${shouldCompress ? 'left-4' : 'left-0.5'}`} />
                     </div>
-                    <span className="text-sm text-[#aaa] select-none">{shouldCompress ? 'چالاکە' : 'ناچالاکە'}</span>
+                    <span className="text-sm select-none" style={{ color: 'var(--text-muted)' }}>{shouldCompress ? 'چالاکە' : 'ناچالاکە'}</span>
                   </label>
                 </div>
               </div>
@@ -710,18 +717,18 @@ export default function App() {
                 <AnimatePresence>
                   {audioBlob && (
                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="mt-4 space-y-3">
-                      <div className="flex items-center justify-between bg-[#0a0a0b] px-4 py-3 rounded-xl border border-[#ffffff08]">
+                      <div className="flex items-center justify-between px-4 py-3 rounded-xl" style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)' }}>
                         <div className="flex items-center gap-3 min-w-0">
                           <FileAudio size={16} className="text-[#ff4e00] shrink-0" />
                           <div className="min-w-0">
-                            <p className="text-xs font-mono text-white truncate" dir="ltr">AUDIO_INPUT</p>
-                            <p className="text-[10px] font-mono text-[#555]" dir="ltr">{(audioBlob.size / (1024 * 1024)).toFixed(2)} MB</p>
+                            <p className="text-xs font-mono truncate" style={{ color: 'var(--text-primary)' }} dir="ltr">AUDIO_INPUT</p>
+                            <p className="text-[10px] font-mono" style={{ color: 'var(--text-dim)' }} dir="ltr">{(audioBlob.size / (1024 * 1024)).toFixed(2)} MB</p>
                           </div>
                         </div>
                         <button onClick={reset} className="text-[#555] hover:text-[#ff4e00] transition-colors p-1.5 shrink-0"><Trash2 size={15} /></button>
                       </div>
                       {audioUrl && (
-                        <div className="bg-[#0a0a0b] rounded-xl border border-[#ffffff08] p-4 space-y-3" dir="ltr">
+                        <div className="rounded-xl p-4 space-y-3" style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)' }} dir="ltr">
                           <audio ref={audioElRef} src={audioUrl}
                             onLoadedMetadata={e => {
                               const d = (e.target as HTMLAudioElement).duration;
@@ -763,16 +770,16 @@ export default function App() {
 
                             {/* Min thumb */}
                             <div
-                              className="absolute top-1/2 z-10 w-5 h-5 rounded-full border-2 border-[#3b82f6] bg-[#0a0a0b] cursor-grab active:cursor-grabbing shadow"
-                              style={{ left: `${sliderMin}%`, transform: 'translate(-50%, -50%)' }}
+                              className="absolute top-1/2 z-10 w-5 h-5 rounded-full border-2 border-[#3b82f6] cursor-grab active:cursor-grabbing shadow"
+                              style={{ left: `${sliderMin}%`, transform: 'translate(-50%, -50%)', background: 'var(--bg-input)' }}
                               onMouseDown={() => { dragging.current = 'min'; }}
                               onTouchStart={() => { dragging.current = 'min'; }}
                             />
 
                             {/* Max thumb */}
                             <div
-                              className="absolute top-1/2 z-10 w-5 h-5 rounded-full border-2 border-[#3b82f6] bg-[#0a0a0b] cursor-grab active:cursor-grabbing shadow"
-                              style={{ left: `${sliderMax}%`, transform: 'translate(-50%, -50%)' }}
+                              className="absolute top-1/2 z-10 w-5 h-5 rounded-full border-2 border-[#3b82f6] cursor-grab active:cursor-grabbing shadow"
+                              style={{ left: `${sliderMax}%`, transform: 'translate(-50%, -50%)', background: 'var(--bg-input)' }}
                               onMouseDown={() => { dragging.current = 'max'; }}
                               onTouchStart={() => { dragging.current = 'max'; }}
                             />
@@ -787,7 +794,7 @@ export default function App() {
                             >
                               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
                             </button>
-                            <span className="text-[11px] font-mono text-[#888] shrink-0">
+                            <span className="text-[11px] font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>
                               {audioDuration > 0 ? fmtMMSS((sliderMin / 100) * audioDuration) : '00:00'}
                             </span>
 
@@ -811,7 +818,7 @@ export default function App() {
                             </button>
 
                             {/* end time + jump */}
-                            <span className="text-[11px] font-mono text-[#888] shrink-0">
+                            <span className="text-[11px] font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>
                               {audioDuration > 0 ? fmtMMSS((sliderMax / 100) * audioDuration) : '--:--'}
                             </span>
                             <button
@@ -843,7 +850,8 @@ export default function App() {
                       <AnimatePresence>
                         {isTranscribing && (
                           <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                            className="rounded-xl border border-[#ffffff08] bg-[#0a0a0b] px-4 py-3 space-y-2"
+                            className="rounded-xl px-4 py-3 space-y-2"
+                            style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)' }}
                           >
                             <div className="flex items-center justify-between" dir="ltr">
                               <div className="flex items-center gap-2">
@@ -908,11 +916,12 @@ export default function App() {
             <AnimatePresence>
               {transcription && (
                 <motion.section initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-                  className="bg-[#141416] rounded-2xl border border-[#ffffff10] shadow-2xl"
+                  className="rounded-2xl shadow-2xl"
+                  style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-7 py-4 border-b border-[#ffffff08]" dir="ltr">
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-7 py-4" style={{ borderBottom: '1px solid var(--border-soft)' }} dir="ltr">
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold">Transcription Output</span>
+                      <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>Transcription Output</span>
                       {isEditingTranscription && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#ff4e00]/15 border border-[#ff4e00]/30 text-[#ff4e00] uppercase tracking-wider font-bold">editing</span>
                       )}
@@ -952,7 +961,8 @@ export default function App() {
                         <AnimatePresence>
                           {showExportMenu && (
                             <motion.div initial={{ opacity: 0, y: 6, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.95 }}
-                              className="absolute left-0 top-full mt-2 w-44 bg-[#141416] border border-[#ffffff12] rounded-xl shadow-2xl overflow-hidden z-50"
+                              className="absolute left-0 top-full mt-2 w-44 rounded-xl shadow-2xl overflow-hidden z-50"
+                              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
                             >
                               {([
                                 { fmt: 'txt', label: 'دابگرە بە .TXT', sub: 'تێکستی سادە' },
@@ -962,13 +972,13 @@ export default function App() {
                                 <button key={fmt} onClick={() => exportText(fmt, transcription)}
                                   className="w-full flex flex-col items-start px-4 py-3 text-right hover:bg-[#ff4e00]/10 transition-colors border-b border-[#ffffff06] last:border-0"
                                 >
-                                  <span className="text-xs text-white font-medium">{label}</span>
-                                  <span className="text-[10px] text-[#555] mt-0.5">{sub}</span>
+                                  <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
+                                  <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>{sub}</span>
                                 </button>
                               ))}
                               {audioBlob && (
-                                <div className="border-t border-[#ffffff08]">
-                                  <p className="px-4 pt-2.5 pb-1 text-[9px] uppercase tracking-widest text-[#444] font-bold">ژێرنووس</p>
+                                <div style={{ borderTop: '1px solid var(--border-soft)' }}>
+                                  <p className="px-4 pt-2.5 pb-1 text-[9px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-faint)' }}>ژێرنووس</p>
                                   {(['srt', 'vtt'] as const).map(fmt => (
                                     <button key={fmt} onClick={() => exportSubtitles(fmt)} disabled={isExportingSubtitles}
                                       className="w-full flex flex-col items-start px-4 py-2.5 text-right hover:bg-[#22d3ee]/08 transition-colors border-b border-[#ffffff06] last:border-0 disabled:opacity-50"
@@ -977,7 +987,7 @@ export default function App() {
                                         {isExportingSubtitles ? <Loader2 size={10} className="animate-spin" /> : null}
                                         دابگرە بە .{fmt.toUpperCase()}
                                       </span>
-                                      <span className="text-[10px] text-[#555] mt-0.5">{fmt === 'srt' ? 'SubRip — بۆ زۆربەی پلەیەرەکان' : 'WebVTT — بۆ وێب و YouTube'}</span>
+                                      <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>{fmt === 'srt' ? 'SubRip — بۆ زۆربەی پلەیەرەکان' : 'WebVTT — بۆ وێب و YouTube'}</span>
                                     </button>
                                   ))}
                                 </div>
@@ -995,7 +1005,8 @@ export default function App() {
                         <AnimatePresence>
                           {showShareMenu && (
                             <motion.div initial={{ opacity: 0, y: 6, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.95 }}
-                              className="absolute left-0 top-full mt-2 w-52 bg-[#141416] border border-[#ffffff12] rounded-xl shadow-2xl overflow-hidden z-50"
+                              className="absolute left-0 top-full mt-2 w-52 rounded-xl shadow-2xl overflow-hidden z-50"
+                              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
                             >
                               {([
                                 { plt: 'telegram', label: 'بناردە تێلیگرام', sub: 'Telegram', icon: '✈️' },
@@ -1007,8 +1018,8 @@ export default function App() {
                                 >
                                   <span className="text-base shrink-0">{icon}</span>
                                   <div className="flex flex-col items-start">
-                                    <span className="text-xs text-white font-medium">{label}</span>
-                                    <span className="text-[10px] text-[#555]">{sub}</span>
+                                    <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
+                                    <span className="text-[10px]" style={{ color: 'var(--text-dim)' }}>{sub}</span>
                                   </div>
                                 </button>
                               ))}
@@ -1024,13 +1035,13 @@ export default function App() {
                         ref={editableRef}
                         value={transcription}
                         onChange={e => setTranscription(e.target.value)}
-                        className="w-full bg-[#0a0a0b] border border-[#ff4e00]/30 rounded-xl px-4 py-4 text-[#e8e8e8] text-xl sm:text-2xl md:text-3xl leading-relaxed resize-none outline-none focus:border-[#ff4e00]/60 transition-colors min-h-[160px]"
-                        style={{ direction: targetLanguage === 'ar' || targetLanguage === 'ku' ? 'rtl' : 'ltr', fontFamily: 'inherit' }}
+                        className="w-full rounded-xl px-4 py-4 text-xl sm:text-2xl md:text-3xl leading-relaxed resize-none outline-none transition-colors min-h-[160px]"
+                        style={{ background: 'var(--bg-input)', border: '1px solid rgba(255,78,0,0.3)', color: 'var(--text-primary)', direction: targetLanguage === 'ar' || targetLanguage === 'ku' ? 'rtl' : 'ltr', fontFamily: 'inherit' }}
                         spellCheck={false}
                         rows={Math.max(4, transcription.split('\n').length + 1)}
                       />
                     ) : (
-                      <p className="text-[#e8e8e8] text-xl sm:text-2xl md:text-3xl leading-relaxed whitespace-pre-wrap cursor-text"
+                      <p className="text-xl sm:text-2xl md:text-3xl leading-relaxed whitespace-pre-wrap cursor-text" style={{ color: 'var(--text-primary)' }}
                         onClick={() => { setIsEditingTranscription(true); setTimeout(() => editableRef.current?.focus(), 50); }}
                         title="کلیک بکە بۆ دەستکاریکردن"
                       >{transcription}</p>
@@ -1061,7 +1072,7 @@ export default function App() {
                               <span>Gemini پوختەکان دەردەهێنێت...</span>
                             </div>
                           ) : (
-                            <p className="text-[#ccc] text-base leading-relaxed whitespace-pre-wrap">{summary}</p>
+                            <p className="text-base leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--text-primary)' }}>{summary}</p>
                           )}
                         </div>
                       </motion.div>
@@ -1069,7 +1080,7 @@ export default function App() {
                   </AnimatePresence>
                   <div className="px-5 sm:px-7 pb-5 flex items-center gap-3" dir="ltr">
                     <div className="flex-1 h-px bg-[#ff4e00]/40 rounded-full" />
-                    <span className="text-[10px] font-mono text-[#444] tracking-widest">{isEditingTranscription ? 'EDITING' : 'COMPLETE'}</span>
+                    <span className="text-[10px] font-mono tracking-widest" style={{ color: 'var(--text-faintest)' }}>{isEditingTranscription ? 'EDITING' : 'COMPLETE'}</span>
                   </div>
                 </motion.section>
               )}
@@ -1078,12 +1089,13 @@ export default function App() {
         ) : activeTab === 'library' ? (
           /* ── LIBRARY ── */
           <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="bg-[#141416] rounded-2xl border border-[#ffffff10] shadow-2xl overflow-hidden"
+            className="rounded-2xl shadow-2xl overflow-hidden"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
           >
-            <div className="flex items-center justify-between px-5 sm:px-7 py-4 border-b border-[#ffffff08]">
+            <div className="flex items-center justify-between px-5 sm:px-7 py-4" style={{ borderBottom: '1px solid var(--border-soft)' }}>
               <div className="flex items-center gap-2">
-                <History size={15} className="text-[#555]" />
-                <span className="text-[10px] uppercase tracking-widest text-[#555] font-bold" dir="ltr">Transcription Library</span>
+                <History size={15} style={{ color: 'var(--text-dim)' }} />
+                <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }} dir="ltr">Transcription Library</span>
                 {history.length > 0 && (
                   <span className="text-[10px] px-2 py-0.5 bg-[#ffffff08] rounded-full text-[#666]">
                     {librarySearch ? `${history.filter(h => h.text.toLowerCase().includes(librarySearch.toLowerCase())).length} / ${history.length}` : history.length}
@@ -1101,16 +1113,17 @@ export default function App() {
 
             {/* Search bar */}
             {history.length > 0 && (
-              <div className="px-5 sm:px-7 py-3 border-b border-[#ffffff06]">
+              <div className="px-5 sm:px-7 py-3" style={{ borderBottom: '1px solid var(--border-soft)' }}>
                 <div className="relative">
-                  <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#444] pointer-events-none" />
+                  <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-faint)' }} />
                   <input
                     type="text"
                     value={librarySearch}
                     onChange={e => setLibrarySearch(e.target.value)}
                     placeholder="گەڕان لە مێژوودا..."
                     dir="rtl"
-                    className="w-full bg-[#0a0a0b] border border-[#ffffff08] rounded-lg pr-9 pl-9 py-2.5 text-sm text-[#e0e0e0] placeholder-[#444] outline-none focus:border-[#ff4e00]/40 transition-colors"
+                    className="w-full rounded-lg pr-9 pl-9 py-2.5 text-sm outline-none transition-colors"
+                    style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
                   />
                   {librarySearch && (
                     <button onClick={() => setLibrarySearch('')} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#444] hover:text-[#aaa] transition-colors">
@@ -1132,9 +1145,9 @@ export default function App() {
               return filtered.length > 0 ? (
               <div className="p-4 sm:p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filtered.map(item => (
-                  <div key={item.id} className="bg-[#0f0f11] p-4 sm:p-5 rounded-xl border border-[#ffffff06] flex flex-col gap-3 hover:border-[#ffffff12] transition-colors">
+                  <div key={item.id} className="p-4 sm:p-5 rounded-xl flex flex-col gap-3 transition-colors" style={{ background: 'var(--bg-hover)', border: '1px solid var(--border-soft)' }}>
                     <div className="flex justify-between items-start gap-2" dir="ltr">
-                      <span className="flex items-center gap-1 text-[#444] text-[10px] font-mono">
+                      <span className="flex items-center gap-1 text-[10px] font-mono" style={{ color: 'var(--text-faint)' }}>
                         <Clock size={10} />
                         {new Date(item.timestamp).toLocaleDateString()} {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
@@ -1143,9 +1156,9 @@ export default function App() {
                         <span className="bg-[#ff4e00]/10 px-1.5 py-0.5 rounded text-[9px] text-[#ff4e00] border border-[#ff4e00]/20 uppercase">{item.language === 'ku' ? 'KU' : 'AR'}</span>
                       </div>
                     </div>
-                    <p className="text-[#ccc] text-base leading-relaxed line-clamp-4 flex-1">{item.text}</p>
-                    <div className="flex justify-between items-center pt-3 border-t border-[#ffffff06]">
-                      <span className="text-[10px] text-[#333] font-mono">#{item.id.slice(-6)}</span>
+                    <p className="text-base leading-relaxed line-clamp-4 flex-1" style={{ color: 'var(--text-primary)' }}>{item.text}</p>
+                    <div className="flex justify-between items-center pt-3" style={{ borderTop: '1px solid var(--border-soft)' }}>
+                      <span className="text-[10px] font-mono" style={{ color: 'var(--text-faintest)' }}>#{item.id.slice(-6)}</span>
                       <div className="flex gap-1.5">
                         <button onClick={() => setDeleteConfirmId(item.id)}
                           className="p-1.5 text-[#444] hover:text-[#ff4e00] bg-[#1a1a1c] border border-[#ffffff08] rounded-lg transition-colors"
@@ -1181,7 +1194,7 @@ export default function App() {
         ) : null}
       </main>
 
-      <footer className="max-w-5xl mx-auto px-4 sm:px-6 py-8 flex items-center justify-between text-[#333] font-mono text-[10px] uppercase tracking-widest" dir="ltr">
+      <footer className="max-w-5xl mx-auto px-4 sm:px-6 py-8 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-faintest)' }} dir="ltr">
         <span>KurdishTranscription</span>
         <span>Powered by Gemini AI</span>
       </footer>
@@ -1193,10 +1206,11 @@ export default function App() {
             className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
           >
             <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
-              className="bg-[#141416] border border-[#ffffff10] rounded-2xl p-6 sm:p-8 shadow-2xl max-w-sm w-full text-center"
+              className="rounded-2xl p-6 sm:p-8 shadow-2xl max-w-sm w-full text-center"
+              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
             >
-              <h3 className="text-xl font-bold text-white mb-3">پێویست بە ڕێگەپێدانی کووکی دەکات</h3>
-              <p className="text-[#888] text-sm mb-6 leading-relaxed">تکایە ئەپەکە لە تابێکی نوێ بکەرەوە.</p>
+              <h3 className="text-xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>پێویست بە ڕێگەپێدانی کووکی دەکات</h3>
+              <p className="text-sm mb-6 leading-relaxed" style={{ color: 'var(--text-muted)' }}>تکایە ئەپەکە لە تابێکی نوێ بکەرەوە.</p>
               <div className="flex flex-col gap-2">
                 <button onClick={() => { window.open(window.location.href, '_blank'); setCookieError(false); }}
                   className="w-full py-3 text-sm font-bold bg-[#ff4e00] text-white rounded-xl hover:bg-[#e64600] transition-colors"
@@ -1215,16 +1229,17 @@ export default function App() {
             className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
           >
             <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
-              className="bg-[#141416] border border-[#ffffff10] rounded-2xl p-6 shadow-2xl max-w-xs w-full"
+              className="rounded-2xl p-6 shadow-2xl max-w-xs w-full"
+              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
             >
-              <h3 className="text-lg font-bold text-white mb-2">
+              <h3 className="text-lg font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
                 {deleteConfirmId === 'all' ? 'سڕینەوەی هەموو مێژووەکە' : 'سڕینەوەی مێژوو'}
               </h3>
-              <p className="text-[#666] text-sm mb-5 leading-relaxed">
+              <p className="text-sm mb-5 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
                 {deleteConfirmId === 'all' ? 'دڵنیای کە دەتەوێت هەموو مێژووەکە بسڕیتەوە؟' : 'دڵنیای کە دەتەوێت ئەم مێژووە بسڕیتەوە؟'}
               </p>
               <div className="flex gap-2 justify-end">
-                <button onClick={() => setDeleteConfirmId(null)} className="px-4 py-2 text-sm text-[#666] hover:text-white transition-colors rounded-lg">پاشگەزبوونەوە</button>
+                <button onClick={() => setDeleteConfirmId(null)} className="px-4 py-2 text-sm hover:text-white transition-colors rounded-lg" style={{ color: 'var(--text-muted)' }}>پاشگەزبوونەوە</button>
                 <button onClick={confirmDelete} className="px-4 py-2 text-sm font-medium bg-[#ff4e00] text-white rounded-lg hover:bg-[#e64600] transition-colors">بەڵێ، بسڕەوە</button>
               </div>
             </motion.div>

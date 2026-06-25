@@ -21,7 +21,7 @@ export default function AuthPage() {
     setLoading(true);
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (e: any) {
+    } catch {
       setError("Google login شکستی هێنا. دووبارە هەوڵ بدەرەوە.");
     } finally {
       setLoading(false);
@@ -57,33 +57,29 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0b] flex items-center justify-center p-4" dir="rtl">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-sm"
-      >
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: 'var(--bg-base)' }} dir="rtl">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-sm">
+
         {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-8" dir="ltr">
           <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(255,255,255,0.1)] relative">
             <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full rotate-45 absolute" />
             <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full -rotate-45" />
           </div>
-          <span className="text-xl font-bold tracking-tighter text-white">
+          <span className="text-xl font-bold tracking-tighter" style={{ color: 'var(--text-primary)' }}>
             Kurdish<span className="text-[#ff4e00]">Transcription</span>
           </span>
         </div>
 
-        <div className="bg-[#141416] border border-[#ffffff10] rounded-2xl p-6 shadow-2xl">
+        <div className="rounded-2xl p-6 border" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', boxShadow: 'var(--shadow)' }}>
           {/* Mode tabs */}
-          <div className="flex bg-[#0a0a0b] rounded-lg p-1 mb-6 border border-[#ffffff08]">
+          <div className="flex rounded-lg p-1 mb-6 border" style={{ background: 'var(--bg-input)', borderColor: 'var(--border-soft)' }}>
             {(["login", "register"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => { setMode(m); setError(null); setInfo(null); }}
+              <button key={m} onClick={() => { setMode(m); setError(null); setInfo(null); }}
                 className={`flex-1 py-2 text-xs font-bold uppercase tracking-widest rounded-md transition-all ${
-                  mode === m ? "bg-[#ff4e00] text-white" : "text-[#555] hover:text-white"
+                  mode === m ? "bg-[#ff4e00] text-white" : "hover:text-white"
                 }`}
+                style={mode !== m ? { color: 'var(--text-dim)' } : {}}
               >
                 {m === "login" ? "داخلبوون" : "تۆمارکردن"}
               </button>
@@ -91,10 +87,9 @@ export default function AuthPage() {
           </div>
 
           {/* Google */}
-          <button
-            onClick={handleGoogle}
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-3 py-3 rounded-xl border border-[#ffffff12] bg-[#1a1a1c] hover:bg-[#222] text-white text-sm font-medium transition-all disabled:opacity-50 mb-4"
+          <button onClick={handleGoogle} disabled={loading}
+            className="w-full flex items-center justify-center gap-3 py-3 rounded-xl text-sm font-medium transition-all disabled:opacity-50 mb-4 border"
+            style={{ background: 'var(--bg-hover)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -106,31 +101,24 @@ export default function AuthPage() {
           </button>
 
           <div className="flex items-center gap-3 mb-4">
-            <div className="flex-1 h-px bg-[#ffffff08]" />
-            <span className="text-[10px] text-[#444] uppercase tracking-widest">یان</span>
-            <div className="flex-1 h-px bg-[#ffffff08]" />
+            <div className="flex-1 h-px" style={{ background: 'var(--border-soft)' }} />
+            <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-faint)' }}>یان</span>
+            <div className="flex-1 h-px" style={{ background: 'var(--border-soft)' }} />
           </div>
 
           {/* Email form */}
           <form onSubmit={handleEmail} className="space-y-3">
-            <input
-              type="email"
-              placeholder="ئیمەیل"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-              className="w-full bg-[#0a0a0b] border border-[#ffffff10] rounded-xl px-4 py-3 text-sm text-white placeholder-[#444] outline-none focus:border-[#ff4e00]/50 transition-colors"
+            <input type="email" placeholder="ئیمەیل" value={email}
+              onChange={e => setEmail(e.target.value)} required
+              className="w-full rounded-xl px-4 py-3 text-sm outline-none border focus:border-[#ff4e00]/50 transition-colors"
+              style={{ background: 'var(--bg-input)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
               dir="ltr"
             />
             {mode !== "reset" && (
-              <input
-                type="password"
-                placeholder="پاسوۆرد"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-                minLength={6}
-                className="w-full bg-[#0a0a0b] border border-[#ffffff10] rounded-xl px-4 py-3 text-sm text-white placeholder-[#444] outline-none focus:border-[#ff4e00]/50 transition-colors"
+              <input type="password" placeholder="پاسوۆرد" value={password}
+                onChange={e => setPassword(e.target.value)} required minLength={6}
+                className="w-full rounded-xl px-4 py-3 text-sm outline-none border focus:border-[#ff4e00]/50 transition-colors"
+                style={{ background: 'var(--bg-input)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
                 dir="ltr"
               />
             )}
@@ -139,22 +127,16 @@ export default function AuthPage() {
               {error && (
                 <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   className="text-[#ff4e00] text-xs bg-[#ff4e00]/08 border border-[#ff4e00]/20 px-3 py-2 rounded-lg"
-                >
-                  {error}
-                </motion.p>
+                >{error}</motion.p>
               )}
               {info && (
                 <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  className="text-green-400 text-xs bg-green-400/08 border border-green-400/20 px-3 py-2 rounded-lg"
-                >
-                  {info}
-                </motion.p>
+                  className="text-green-500 text-xs bg-green-500/08 border border-green-500/20 px-3 py-2 rounded-lg"
+                >{info}</motion.p>
               )}
             </AnimatePresence>
 
-            <button
-              type="submit"
-              disabled={loading}
+            <button type="submit" disabled={loading}
               className="w-full py-3 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-widest uppercase hover:bg-[#e64600] transition-all disabled:opacity-50 shadow-[0_0_20px_rgba(255,78,0,0.2)]"
             >
               {loading ? "چاوەڕوانبە..." : mode === "login" ? "داخلبوون" : mode === "register" ? "تۆمارکردن" : "نێردنی ئیمەیل"}
@@ -162,17 +144,17 @@ export default function AuthPage() {
           </form>
 
           {mode === "login" && (
-            <button
-              onClick={() => { setMode("reset"); setError(null); setInfo(null); }}
-              className="w-full mt-3 text-[11px] text-[#444] hover:text-[#888] transition-colors"
+            <button onClick={() => { setMode("reset"); setError(null); setInfo(null); }}
+              className="w-full mt-3 text-[11px] transition-colors hover:text-[#ff4e00]"
+              style={{ color: 'var(--text-faint)' }}
             >
               پاسوۆردت لەبیرچووە؟
             </button>
           )}
           {mode === "reset" && (
-            <button
-              onClick={() => { setMode("login"); setError(null); setInfo(null); }}
-              className="w-full mt-3 text-[11px] text-[#444] hover:text-[#888] transition-colors"
+            <button onClick={() => { setMode("login"); setError(null); setInfo(null); }}
+              className="w-full mt-3 text-[11px] transition-colors hover:text-[#ff4e00]"
+              style={{ color: 'var(--text-faint)' }}
             >
               ← گەڕانەوە بۆ داخلبوون
             </button>
