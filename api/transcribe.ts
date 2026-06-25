@@ -150,7 +150,16 @@ Rules:
 
     const lastMsg = String(lastError?.message || '');
     if (lastMsg.includes('quota') || lastMsg.includes('RESOURCE_EXHAUSTED') || lastMsg.includes('429')) {
-      throw new Error("کۆتای داواکاری ڕۆژانەی Gemini تەواو بووە. تکایە سبەی دووبارە هەوڵ بدەرەوە، یان لە AI Studio billing چالاک بکە، یان مۆدێلی ElevenLabs Scribe بەکاربهێنە.");
+      const nowUTC = new Date();
+      const resetUTC = new Date(nowUTC);
+      resetUTC.setUTCHours(24, 0, 0, 0);
+      const diffMs = resetUTC.getTime() - nowUTC.getTime();
+      const diffH = Math.floor(diffMs / 3600000);
+      const diffM = Math.floor((diffMs % 3600000) / 60000);
+      const resetKurdish = new Date(resetUTC.getTime() + 3 * 3600000);
+      const kh = resetKurdish.getUTCHours().toString().padStart(2, '0');
+      const km = resetKurdish.getUTCMinutes().toString().padStart(2, '0');
+      throw new Error(`کۆتای داواکاری ڕۆژانەی Gemini تەواو بووە. دووبارە دەستپێ دەکاتەوە لە ساعەت ${kh}:${km} کوردستان (${diffH} کاتژمێر و ${diffM} خولەک دیکە). تکایە مۆدێلی ElevenLabs Scribe بەکاربهێنە یان چاوەڕوانبە.`);
     }
     throw lastError;
   } catch (error: any) {
