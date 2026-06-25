@@ -2,7 +2,6 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   signInWithPopup,
-  signInWithRedirect,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
@@ -21,15 +20,11 @@ export default function AuthPage() {
     setError(null);
     setLoading(true);
     try {
-      await signInWithRedirect(auth, googleProvider);
+      await signInWithPopup(auth, googleProvider);
     } catch (e: any) {
-      // fallback to popup if redirect fails
-      try {
-        await signInWithPopup(auth, googleProvider);
-      } catch {
-        setError("Google login شکستی هێنا. دووبارە هەوڵ بدەرەوە.");
-        setLoading(false);
-      }
+      setError("Google login شکستی هێنا. دووبارە هەوڵ بدەرەوە.");
+    } finally {
+      setLoading(false);
     }
   };
 
