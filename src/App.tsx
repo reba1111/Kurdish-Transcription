@@ -55,6 +55,14 @@ export default function App() {
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
 
+  // Dual-range slider state
+  const [sliderMin, setSliderMin] = useState(0);   // 0–100
+  const [sliderMax, setSliderMax] = useState(100); // 0–100
+  const [currentPct, setCurrentPct] = useState(0); // playback position 0–100
+  const [isPlaying, setIsPlaying] = useState(false);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef<'min'|'max'|'scrubber'|null>(null);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
@@ -63,6 +71,66 @@ export default function App() {
     const unsub = onAuthStateChanged(auth, u => setUser(u));
     return unsub;
   }, []);
+
+  // Sync audio currentTime → currentPct; enforce loop between sliderMin–sliderMax
+  useEffect(() => {
+    const el = audioElRef.current;
+    if (!el) return;
+    const onTime = () => {
+      if (!audioDuration) return;
+      const pct = (el.currentTime / audioDuration) * 100;
+      setCurrentPct(pct);
+      const maxTime = (sliderMax / 100) * audioDuration;
+      if (el.currentTime >= maxTime) {
+        el.currentTime = (sliderMin / 100) * audioDuration;
+        if (!el.paused) el.play();
+      }
+    };
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    el.addEventListener('timeupdate', onTime);
+    el.addEventListener('play', onPlay);
+    el.addEventListener('pause', onPause);
+    return () => {
+      el.removeEventListener('timeupdate', onTime);
+      el.removeEventListener('play', onPlay);
+      el.removeEventListener('pause', onPause);
+    };
+  }, [audioDuration, sliderMin, sliderMax]);
+
+  // Mouse/touch drag logic for dual-range and scrubber
+  useEffect(() => {
+    const onMove = (clientX: number) => {
+      if (!dragging.current || !trackRef.current || !audioDuration) return;
+      const rect = trackRef.current.getBoundingClientRect();
+      let pct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+      if (dragging.current === 'min') {
+        const clamped = Math.min(pct, sliderMax - 2);
+        setSliderMin(clamped);
+      } else if (dragging.current === 'max') {
+        const clamped = Math.max(pct, sliderMin + 2);
+        setSliderMax(clamped);
+      } else if (dragging.current === 'scrubber') {
+        const clamped = Math.max(sliderMin, Math.min(sliderMax, pct));
+        const el = audioElRef.current;
+        if (el) el.currentTime = (clamped / 100) * audioDuration;
+        setCurrentPct(clamped);
+      }
+    };
+    const onMouseMove = (e: MouseEvent) => onMove(e.clientX);
+    const onTouchMove = (e: TouchEvent) => onMove(e.touches[0].clientX);
+    const onUp = () => { dragging.current = null; };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onTouchMove);
+    window.addEventListener('touchend', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onUp);
+    };
+  }, [audioDuration, sliderMin, sliderMax]);
 
   // Load history from Firestore when user logs in
   useEffect(() => {
@@ -370,6 +438,7 @@ export default function App() {
     setAudioBlob(null); setAudioUrl(null); setTranscription(""); setError(null);
     setSummary(''); setShowSummary(false);
     setAudioDuration(0); setRangeStart(''); setRangeEnd(''); setShowRangeEditor(false);
+    setSliderMin(0); setSliderMax(100); setCurrentPct(0); setIsPlaying(false);
   };
 
   const parseMMSS = (val: string): number => {
@@ -619,14 +688,123 @@ export default function App() {
                         <button onClick={reset} className="text-[#555] hover:text-[#ff4e00] transition-colors p-1.5 shrink-0"><Trash2 size={15} /></button>
                       </div>
                       {audioUrl && (
-                        <div className="bg-[#0a0a0b] rounded-xl border border-[#ffffff08] overflow-hidden p-3">
-                          <audio ref={audioElRef} src={audioUrl} controls
-                            className="w-full"
+                        <div className="bg-[#0a0a0b] rounded-xl border border-[#ffffff08] p-4 space-y-3" dir="ltr">
+                          <audio ref={audioElRef} src={audioUrl}
                             onLoadedMetadata={e => {
                               const d = (e.target as HTMLAudioElement).duration;
                               if (isFinite(d)) { setAudioDuration(d); setRangeEnd(fmtMMSS(d)); }
                             }}
                           />
+
+                          {/* ── Range label pill ── */}
+                          <div className="flex justify-center">
+                            <div className="bg-[#1e3a5f] text-[#60a5fa] text-[11px] font-bold px-3 py-1 rounded-full tracking-wider">
+                              {Math.round(sliderMin)} — {Math.round(sliderMax)}
+                            </div>
+                          </div>
+
+                          {/* ── Dual-range track ── */}
+                          <div
+                            ref={trackRef}
+                            className="relative h-10 flex items-center select-none"
+                          >
+                            {/* Full track */}
+                            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 bg-[#ffffff12] rounded-full" />
+
+                            {/* Active range fill */}
+                            <div
+                              className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-[#3b82f6] rounded-full"
+                              style={{ left: `${sliderMin}%`, width: `${sliderMax - sliderMin}%` }}
+                            />
+
+                            {/* Playback progress dot on active range */}
+                            {audioDuration > 0 && currentPct >= sliderMin && currentPct <= sliderMax && (
+                              <div
+                                className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-[#93c5fd] rounded-full pointer-events-none"
+                                style={{ left: `${sliderMin}%`, width: `${currentPct - sliderMin}%` }}
+                              />
+                            )}
+
+                            {/* Scrubber — current position */}
+                            {audioDuration > 0 && (
+                              <div
+                                className="absolute top-1/2 w-4 h-4 bg-white rounded-full shadow-md cursor-grab active:cursor-grabbing z-20"
+                                style={{ left: `${currentPct}%`, transform: 'translate(-50%, -50%)' }}
+                                onMouseDown={() => { dragging.current = 'scrubber'; }}
+                                onTouchStart={() => { dragging.current = 'scrubber'; }}
+                              />
+                            )}
+
+                            {/* Min thumb */}
+                            <div
+                              className="absolute top-1/2 z-10 w-5 h-5 rounded-full border-2 border-[#3b82f6] bg-[#0a0a0b] cursor-grab active:cursor-grabbing shadow"
+                              style={{ left: `${sliderMin}%`, transform: 'translate(-50%, -50%)' }}
+                              onMouseDown={() => { dragging.current = 'min'; }}
+                              onTouchStart={() => { dragging.current = 'min'; }}
+                            />
+
+                            {/* Max thumb */}
+                            <div
+                              className="absolute top-1/2 z-10 w-5 h-5 rounded-full border-2 border-[#3b82f6] bg-[#0a0a0b] cursor-grab active:cursor-grabbing shadow"
+                              style={{ left: `${sliderMax}%`, transform: 'translate(-50%, -50%)' }}
+                              onMouseDown={() => { dragging.current = 'max'; }}
+                              onTouchStart={() => { dragging.current = 'max'; }}
+                            />
+                          </div>
+
+                          {/* ── Time labels ── */}
+                          <div className="flex justify-between text-[10px] font-mono text-[#555]">
+                            <span>{audioDuration > 0 ? fmtMMSS((sliderMin / 100) * audioDuration) : '00:00'}</span>
+                            <span className="text-[#888]">{audioDuration > 0 ? fmtMMSS((currentPct / 100) * audioDuration) : '--:--'}</span>
+                            <span>{audioDuration > 0 ? fmtMMSS((sliderMax / 100) * audioDuration) : '--:--'}</span>
+                          </div>
+
+                          {/* ── Play/Pause ── */}
+                          <div className="flex items-center justify-center gap-3">
+                            {/* Jump to start of range */}
+                            <button
+                              onClick={() => {
+                                const el = audioElRef.current;
+                                if (el && audioDuration) el.currentTime = (sliderMin / 100) * audioDuration;
+                              }}
+                              className="text-[#555] hover:text-white transition-colors"
+                              title="Jump to start"
+                            >
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                const el = audioElRef.current;
+                                if (!el) return;
+                                if (el.paused) {
+                                  const minTime = (sliderMin / 100) * audioDuration;
+                                  const maxTime = (sliderMax / 100) * audioDuration;
+                                  if (el.currentTime < minTime || el.currentTime >= maxTime) el.currentTime = minTime;
+                                  el.play();
+                                } else {
+                                  el.pause();
+                                }
+                              }}
+                              className="w-10 h-10 flex items-center justify-center rounded-full bg-[#3b82f6] hover:bg-[#2563eb] text-white transition-colors shadow-[0_0_16px_rgba(59,130,246,0.35)]"
+                            >
+                              {isPlaying
+                                ? <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                                : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>}
+                            </button>
+
+                            {/* Jump to end of range */}
+                            <button
+                              onClick={() => {
+                                const el = audioElRef.current;
+                                if (el && audioDuration) el.currentTime = (sliderMax / 100) * audioDuration;
+                              }}
+                              className="text-[#555] hover:text-white transition-colors"
+                              title="Jump to end"
+                            >
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm2.5-6 5.5 3.9V8.1L8.5 12zM16 6h2v12h-2z"/></svg>
+                            </button>
+                          </div>
                         </div>
                       )}
 
