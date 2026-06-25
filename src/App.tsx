@@ -591,6 +591,12 @@ export default function App() {
                     <p className="text-xs text-white font-medium truncate">{user.displayName || "کاربەر"}</p>
                     <p className="text-[10px] text-[#555] truncate">{user.email}</p>
                   </button>
+                  <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-[#888] hover:text-white hover:bg-[#ffffff05] transition-colors"
+                  >
+                    <User size={13} />
+                    دەستکاری پرۆفایل
+                  </button>
                   <button onClick={() => { signOut(auth); setShowUserMenu(false); }}
                     className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-[#888] hover:text-[#ff4e00] hover:bg-[#ff4e00]/05 transition-colors"
                   >
