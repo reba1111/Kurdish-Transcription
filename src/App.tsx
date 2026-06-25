@@ -579,8 +579,6 @@ export default function App() {
               className="flex items-center gap-2 rounded-xl px-2.5 py-1.5 transition-colors"
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
             >
-              {/* Theme icon on left */}
-              {theme === 'dark' ? <Moon size={14} style={{ color: 'var(--text-muted)' }} /> : theme === 'light' ? <Sun size={14} style={{ color: 'var(--text-muted)' }} /> : <Monitor size={14} style={{ color: 'var(--text-muted)' }} />}
               {/* Avatar */}
               {user.photoURL
                 ? <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="" />
@@ -588,9 +586,12 @@ export default function App() {
                     {(user.displayName || user.email || 'U')[0].toUpperCase()}
                   </div>
               }
+              {/* Name */}
               <span className="hidden sm:block text-xs max-w-[80px] truncate" style={{ color: 'var(--text-muted)' }}>
                 {user.displayName || user.email?.split('@')[0]}
               </span>
+              {/* Theme icon on right */}
+              {theme === 'dark' ? <Moon size={14} style={{ color: 'var(--text-muted)' }} /> : theme === 'light' ? <Sun size={14} style={{ color: 'var(--text-muted)' }} /> : <Monitor size={14} style={{ color: 'var(--text-muted)' }} />}
             </button>
 
             <AnimatePresence>
