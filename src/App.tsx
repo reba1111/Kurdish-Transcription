@@ -7,7 +7,7 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles } from "lucide-react";
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from "firebase/auth";
-import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch } from "firebase/firestore";
+import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import AuthPage from "./AuthPage";
 import ProfilePage from "./ProfilePage";
@@ -66,7 +66,17 @@ export default function App() {
 
   // Auth listener
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => setUser(u));
+    const unsub = onAuthStateChanged(auth, u => {
+      setUser(u);
+      if (u) {
+        setDoc(doc(db, "users", u.uid), {
+          displayName: u.displayName || "",
+          email: u.email || "",
+          photoURL: u.photoURL || "",
+          lastLogin: Date.now(),
+        }, { merge: true }).catch(() => {});
+      }
+    });
     return unsub;
   }, []);
 
