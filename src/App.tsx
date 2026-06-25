@@ -547,17 +547,17 @@ export default function App() {
       <header className="sticky top-0 z-30 border-b" style={{ background: 'var(--bg-base)', borderColor: 'var(--border)' }}>
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-3">
 
-          {/* Logo */}
-          <div className="flex items-center gap-2.5 shrink-0" dir="ltr">
+          {/* Logo — click to go home */}
+          <button onClick={() => setActiveTab('transcribe')} className="flex items-center gap-2.5 shrink-0" dir="ltr">
             <div className="w-8 h-8 bg-[#ff4e00] rounded-xl flex items-center justify-center shadow-[0_4px_12px_rgba(255,78,0,0.3)]">
               <span className="text-white font-black text-sm">K</span>
             </div>
             <span className="text-base sm:text-lg font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>
               Kurdish<span className="text-[#ff4e00]">Trans</span>
             </span>
-          </div>
+          </button>
 
-          {/* Desktop Nav — underline style */}
+          {/* Desktop Nav */}
           <nav className="hidden sm:flex gap-1" dir="ltr">
             {(['transcribe', 'library', 'profile'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
@@ -573,28 +573,53 @@ export default function App() {
             ))}
           </nav>
 
-          {/* Right side: User menu (with theme inside) */}
-          <div className="relative shrink-0" dir="ltr">
-            <button onClick={() => setShowUserMenu(p => !p)}
-              className="flex items-center gap-2 rounded-xl px-3 py-1.5 transition-all hover:bg-[#ff4e00]/08"
-              style={{ border: '1px solid var(--border)' }}
-            >
+          {/* Right: mobile hamburger + desktop user menu */}
+          <div className="flex items-center gap-2" dir="ltr">
+
+            {/* Mobile: avatar + hamburger */}
+            <div className="flex sm:hidden items-center gap-2">
+              {/* Avatar */}
               {user.photoURL
-                ? <img src={user.photoURL} className="w-7 h-7 rounded-full ring-2 ring-[#ff4e00]/20" alt="" />
-                : <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#ff4e00] to-[#ff7a40] flex items-center justify-center text-white text-xs font-bold shadow-sm">
+                ? <img src={user.photoURL} className="w-8 h-8 rounded-full ring-2 ring-[#ff4e00]/20" alt="" />
+                : <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#ff4e00] to-[#ff7a40] flex items-center justify-center text-white text-xs font-bold">
                     {(user.displayName || user.email || 'U')[0].toUpperCase()}
                   </div>
               }
-              <span className="hidden sm:block text-xs font-medium max-w-[90px] truncate" style={{ color: 'var(--text-primary)' }}>
-                {user.displayName || user.email?.split('@')[0]}
-              </span>
-              <ChevronDown size={12} style={{ color: 'var(--text-dim)' }} />
-            </button>
+              {/* Hamburger */}
+              <button onClick={() => setShowUserMenu(p => !p)}
+                className="flex flex-col gap-1.5 justify-center items-center w-8 h-8 rounded-lg transition-colors"
+                style={{ border: '1px solid var(--border)' }}
+              >
+                <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
+                <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
+                <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
+              </button>
+            </div>
 
+            {/* Desktop: full user button */}
+            <div className="relative hidden sm:block shrink-0">
+              <button onClick={() => setShowUserMenu(p => !p)}
+                className="flex items-center gap-2 rounded-xl px-3 py-1.5 transition-all hover:bg-[#ff4e00]/08"
+                style={{ border: '1px solid var(--border)' }}
+              >
+                {user.photoURL
+                  ? <img src={user.photoURL} className="w-7 h-7 rounded-full ring-2 ring-[#ff4e00]/20" alt="" />
+                  : <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#ff4e00] to-[#ff7a40] flex items-center justify-center text-white text-xs font-bold">
+                      {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                    </div>
+                }
+                <span className="text-xs font-medium max-w-[90px] truncate" style={{ color: 'var(--text-primary)' }}>
+                  {user.displayName || user.email?.split('@')[0]}
+                </span>
+                <ChevronDown size={12} style={{ color: 'var(--text-dim)' }} />
+              </button>
+            </div>
+
+            {/* Dropdown (shared mobile+desktop) */}
             <AnimatePresence>
               {showUserMenu && (
                 <motion.div initial={{ opacity: 0, y: 6, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.97 }}
-                  className="absolute left-0 top-full mt-2 w-56 rounded-xl shadow-2xl overflow-hidden z-50"
+                  className="absolute right-4 top-14 sm:top-full sm:right-0 sm:mt-2 w-56 rounded-xl shadow-2xl overflow-hidden z-50"
                   style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
                 >
                   {/* User info */}
@@ -605,6 +630,22 @@ export default function App() {
                     <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{user.displayName || "کاربەر"}</p>
                     <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
                   </button>
+
+                  {/* Mobile tabs inside menu */}
+                  <div className="sm:hidden px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                    <p className="text-[10px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>بەشەکان</p>
+                    <div className="flex gap-1">
+                      {([['transcribe', Mic, 'نووسینەوە'], ['library', History, 'کتێبخانە'], ['profile', User, 'پرۆفایل']] as const).map(([tab, Icon, label]) => (
+                        <button key={tab} onClick={() => { setActiveTab(tab as any); setShowUserMenu(false); }}
+                          className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:bg-[#ff4e00]/10'}`}
+                          style={activeTab !== tab ? { color: 'var(--text-muted)', border: '1px solid var(--border)' } : {}}
+                        >
+                          <Icon size={13} />
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
                   {/* Theme selector */}
                   <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
