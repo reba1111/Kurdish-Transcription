@@ -371,7 +371,7 @@ export default function App() {
   const exportText = (format: 'txt' | 'docx' | 'pdf', text: string) => {
     const filename = `voxscript-${Date.now()}`;
     const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
-    const htmlDoc = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>VoxScript</title><style>body{font-family:"Arial","Tahoma",sans-serif;font-size:16pt;line-height:2;direction:rtl;text-align:right;padding:2cm;color:#000;}</style></head><body>${escaped}</body></html>`;
+    const htmlDoc = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Kurdish Transcription</title><style>body{font-family:"Arial","Tahoma",sans-serif;font-size:16pt;line-height:2;direction:rtl;text-align:right;padding:2cm;color:#000;}</style></head><body>${escaped}</body></html>`;
 
     if (format === 'txt') {
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
@@ -550,7 +550,7 @@ export default function App() {
               <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full rotate-45 absolute" />
               <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full -rotate-45" />
             </div>
-            <span className="text-lg sm:text-xl font-bold tracking-tighter text-white">VOX<span className="text-[#ff4e00]">SCRIPT</span></span>
+            <span className="text-lg sm:text-xl font-bold tracking-tighter text-white">Kurdish<span className="text-[#ff4e00]">Transcription</span></span>
           </div>
 
           {/* Nav */}
@@ -1169,7 +1169,7 @@ export default function App() {
       </main>
 
       <footer className="max-w-5xl mx-auto px-4 sm:px-6 py-8 flex items-center justify-between text-[#333] font-mono text-[10px] uppercase tracking-widest" dir="ltr">
-        <span>VoxScript</span>
+        <span>KurdishTranscription</span>
         <span>Powered by Gemini AI</span>
       </footer>
 

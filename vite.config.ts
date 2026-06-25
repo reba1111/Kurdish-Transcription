@@ -13,8 +13,8 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'icon-192.svg', 'icon-512.svg'],
         manifest: {
-          name: 'VoxScript — Kurdish Transcription',
-          short_name: 'VoxScript',
+          name: 'Kurdish Transcription',
+          short_name: 'Kurdish Trans',
           description: 'گۆڕینی دەنگی کوردی بە نووسین',
           theme_color: '#0a0a0b',
           background_color: '#0a0a0b',
