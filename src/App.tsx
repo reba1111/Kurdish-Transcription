@@ -548,27 +548,27 @@ export default function App() {
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-3">
 
           {/* Logo */}
-          <div className="flex items-center gap-2 shrink-0" dir="ltr">
-            <div className="w-7 h-7 sm:w-9 sm:h-9 bg-white rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(255,255,255,0.1)] relative">
-              <div className="w-4 h-0.5 bg-[#0a0a0b] rounded-full rotate-45 absolute" />
-              <div className="w-4 h-0.5 bg-[#0a0a0b] rounded-full -rotate-45" />
+          <div className="flex items-center gap-2.5 shrink-0" dir="ltr">
+            <div className="w-8 h-8 bg-[#ff4e00] rounded-xl flex items-center justify-center shadow-[0_4px_12px_rgba(255,78,0,0.3)]">
+              <span className="text-white font-black text-sm">K</span>
             </div>
-            <span className="text-base sm:text-xl font-bold tracking-tighter" style={{ color: 'var(--text-primary)' }}>
-              <span className="hidden sm:inline">Kurdish</span><span className="text-[#ff4e00]">KT</span><span className="hidden sm:inline text-[#ff4e00]" style={{ color: 'var(--text-primary)' }}>ranscription</span>
+            <span className="text-base sm:text-lg font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+              Kurdish<span className="text-[#ff4e00]">Trans</span>
             </span>
           </div>
 
-          {/* Desktop Nav */}
-          <nav className="hidden sm:flex gap-1 rounded-lg p-1" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }} dir="ltr">
+          {/* Desktop Nav — underline style */}
+          <nav className="hidden sm:flex gap-1" dir="ltr">
             {(['transcribe', 'library', 'profile'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:text-white'}`}
+                className={`relative px-4 py-2 text-sm font-medium transition-all rounded-lg ${activeTab === tab ? 'text-[#ff4e00]' : 'hover:bg-[#ff4e00]/05'}`}
                 style={activeTab !== tab ? { color: 'var(--text-muted)' } : undefined}
               >
                 {tab === 'transcribe' ? 'Transcribe' : tab === 'library' ? 'Library' : 'پرۆفایل'}
                 {tab === 'library' && history.length > 0 && (
-                  <span className={`mr-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${activeTab === 'library' ? 'bg-white/20' : 'bg-[#ff4e00]/20 text-[#ff4e00]'}`}>{history.length}</span>
+                  <span className="mr-1.5 text-[9px] px-1.5 py-0.5 rounded-full bg-[#ff4e00] text-white">{history.length}</span>
                 )}
+                {activeTab === tab && <div className="absolute bottom-0 left-3 right-3 h-0.5 bg-[#ff4e00] rounded-full" />}
               </button>
             ))}
           </nav>
@@ -576,18 +576,19 @@ export default function App() {
           {/* Right side: User menu (with theme inside) */}
           <div className="relative shrink-0" dir="ltr">
             <button onClick={() => setShowUserMenu(p => !p)}
-              className="flex items-center gap-2 rounded-xl px-2.5 py-1.5 transition-colors"
-              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+              className="flex items-center gap-2 rounded-xl px-3 py-1.5 transition-all hover:bg-[#ff4e00]/08"
+              style={{ border: '1px solid var(--border)' }}
             >
               {user.photoURL
-                ? <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="" />
-                : <div className="w-6 h-6 rounded-full bg-[#ff4e00] flex items-center justify-center text-white text-[10px] font-bold">
+                ? <img src={user.photoURL} className="w-7 h-7 rounded-full ring-2 ring-[#ff4e00]/20" alt="" />
+                : <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#ff4e00] to-[#ff7a40] flex items-center justify-center text-white text-xs font-bold shadow-sm">
                     {(user.displayName || user.email || 'U')[0].toUpperCase()}
                   </div>
               }
-              <span className="hidden sm:block text-xs max-w-[80px] truncate" style={{ color: 'var(--text-muted)' }}>
+              <span className="hidden sm:block text-xs font-medium max-w-[90px] truncate" style={{ color: 'var(--text-primary)' }}>
                 {user.displayName || user.email?.split('@')[0]}
               </span>
+              <ChevronDown size={12} style={{ color: 'var(--text-dim)' }} />
             </button>
 
             <AnimatePresence>
