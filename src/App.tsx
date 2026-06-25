@@ -10,6 +10,7 @@ import { onAuthStateChanged, signOut, type User as FirebaseUser } from "firebase
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import AuthPage from "./AuthPage";
+import ProfilePage from "./ProfilePage";
 
 type HistoryItem = {
   id: string;
@@ -33,7 +34,7 @@ export default function App() {
   const [targetLanguage, setTargetLanguage] = useState<'ku' | 'ar'>('ku');
   const [selectedModel, setSelectedModel] = useState<'gemini-pro' | 'gemini' | 'gemini-flash2' | 'scribe'>('gemini-pro');
   const [shouldCompress, setShouldCompress] = useState(true);
-  const [activeTab, setActiveTab] = useState<'transcribe' | 'library'>('transcribe');
+  const [activeTab, setActiveTab] = useState<'transcribe' | 'library' | 'profile'>('transcribe');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | 'all' | null>(null);
@@ -544,11 +545,11 @@ export default function App() {
 
           {/* Nav */}
           <nav className="flex gap-1 bg-[#141416] border border-[#ffffff10] rounded-lg p-1" dir="ltr">
-            {(['transcribe', 'library'] as const).map(tab => (
+            {(['transcribe', 'library', 'profile'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`px-3 sm:px-4 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'text-[#888] hover:text-white'}`}
               >
-                {tab === 'transcribe' ? 'Transcribe' : 'Library'}
+                {tab === 'transcribe' ? 'Transcribe' : tab === 'library' ? 'Library' : 'پرۆفایل'}
                 {tab === 'library' && history.length > 0 && (
                   <span className={`mr-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${activeTab === 'library' ? 'bg-white/20' : 'bg-[#ffffff15]'}`}>{history.length}</span>
                 )}
@@ -1144,6 +1145,10 @@ export default function App() {
               </div>
             )}
           </motion.section>
+        )}
+
+        {activeTab === 'profile' && (
+          <ProfilePage user={user} />
         )}
       </main>
 
