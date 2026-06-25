@@ -544,22 +544,25 @@ export default function App() {
     <div className="min-h-screen font-sans selection:bg-[#ff4e00]/30" style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }} dir="rtl">
 
       {/* ── HEADER ── */}
-      <header className="sticky top-0 z-30 backdrop-blur border-b" style={{ background: 'var(--bg-base)', borderColor: 'var(--border)' }}>
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-30 backdrop-blur-md border-b" style={{ background: 'var(--bg-base)', borderColor: 'var(--border)' }}>
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-3">
+
           {/* Logo */}
           <div className="flex items-center gap-2 shrink-0" dir="ltr">
-            <div className="w-8 h-8 sm:w-9 sm:h-9 bg-white rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(255,255,255,0.1)] relative">
-              <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full rotate-45 absolute" />
-              <div className="w-5 h-0.5 bg-[#0a0a0b] rounded-full -rotate-45" />
+            <div className="w-7 h-7 sm:w-9 sm:h-9 bg-white rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(255,255,255,0.1)] relative">
+              <div className="w-4 h-0.5 bg-[#0a0a0b] rounded-full rotate-45 absolute" />
+              <div className="w-4 h-0.5 bg-[#0a0a0b] rounded-full -rotate-45" />
             </div>
-            <span className="text-lg sm:text-xl font-bold tracking-tighter" style={{ color: 'var(--text-primary)' }}>Kurdish<span className="text-[#ff4e00]">Transcription</span></span>
+            <span className="text-base sm:text-xl font-bold tracking-tighter" style={{ color: 'var(--text-primary)' }}>
+              <span className="hidden sm:inline">Kurdish</span><span className="text-[#ff4e00]">KT</span><span className="hidden sm:inline text-[#ff4e00]" style={{ color: 'var(--text-primary)' }}>ranscription</span>
+            </span>
           </div>
 
-          {/* Nav */}
-          <nav className="flex gap-1 rounded-lg p-1" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }} dir="ltr">
+          {/* Desktop Nav */}
+          <nav className="hidden sm:flex gap-1 rounded-lg p-1" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }} dir="ltr">
             {(['transcribe', 'library', 'profile'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
-                className={`px-3 sm:px-4 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:text-white'}`}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:text-white'}`}
                 style={activeTab !== tab ? { color: 'var(--text-muted)' } : undefined}
               >
                 {tab === 'transcribe' ? 'Transcribe' : tab === 'library' ? 'Library' : 'پرۆفایل'}
@@ -570,66 +573,91 @@ export default function App() {
             ))}
           </nav>
 
-          {/* Theme toggle */}
-          <div className="flex gap-0.5 rounded-lg p-1 shrink-0" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }} dir="ltr">
-            {([['dark', Moon], ['light', Sun], ['system', Monitor]] as const).map(([t, Icon]) => (
-              <button key={t} onClick={() => setTheme(t)}
-                className={`p-1.5 rounded-md transition-all ${theme === t ? 'bg-[#ff4e00] text-white' : 'hover:text-white'}`}
-                style={theme !== t ? { color: 'var(--text-dim)' } : undefined}
-              >
-                <Icon size={13} />
-              </button>
-            ))}
-          </div>
-
-          {/* User menu */}
-          <div className="relative shrink-0" dir="ltr">
-            <button onClick={() => setShowUserMenu(p => !p)}
-              className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors"
-              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
-            >
-              {user.photoURL
-                ? <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="" />
-                : <User size={15} style={{ color: 'var(--text-muted)' }} />
-              }
-              <span className="hidden sm:block text-xs max-w-[100px] truncate" style={{ color: 'var(--text-muted)' }}>
-                {user.displayName || user.email?.split('@')[0]}
-              </span>
-            </button>
-            <AnimatePresence>
-              {showUserMenu && (
-                <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }}
-                  className="absolute left-0 top-full mt-2 w-48 rounded-xl shadow-2xl overflow-hidden z-50"
-                  style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+          {/* Right side: Theme + User */}
+          <div className="flex items-center gap-2" dir="ltr">
+            {/* Theme toggle */}
+            <div className="flex gap-0.5 rounded-lg p-1" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+              {([['dark', Moon], ['light', Sun], ['system', Monitor]] as const).map(([t, Icon]) => (
+                <button key={t} onClick={() => setTheme(t)}
+                  className={`p-1.5 rounded-md transition-all ${theme === t ? 'bg-[#ff4e00] text-white' : 'hover:text-white'}`}
+                  style={theme !== t ? { color: 'var(--text-dim)' } : undefined}
                 >
-                  <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
-                    className="w-full text-right px-3 py-2.5 hover:bg-[#ffffff05] transition-colors"
-                    style={{ borderBottom: '1px solid var(--border-soft)' }}
+                  <Icon size={13} />
+                </button>
+              ))}
+            </div>
+
+            {/* User menu */}
+            <div className="relative shrink-0">
+              <button onClick={() => setShowUserMenu(p => !p)}
+                className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors"
+                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+              >
+                {user.photoURL
+                  ? <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="" />
+                  : <div className="w-6 h-6 rounded-full bg-[#ff4e00] flex items-center justify-center text-white text-[10px] font-bold">
+                      {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                    </div>
+                }
+                <span className="hidden sm:block text-xs max-w-[100px] truncate" style={{ color: 'var(--text-muted)' }}>
+                  {user.displayName || user.email?.split('@')[0]}
+                </span>
+              </button>
+              <AnimatePresence>
+                {showUserMenu && (
+                  <motion.div initial={{ opacity: 0, y: 6, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.97 }}
+                    className="absolute left-0 top-full mt-2 w-52 rounded-xl shadow-2xl overflow-hidden z-50"
+                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
                   >
-                    <p className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>{user.displayName || "کاربەر"}</p>
-                    <p className="text-[10px] truncate" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
-                  </button>
-                  <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs hover:text-[#ff4e00] transition-colors"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    <User size={13} />
-                    دەستکاری پرۆفایل
-                  </button>
-                  <button onClick={() => { signOut(auth); setShowUserMenu(false); }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-[#888] hover:text-[#ff4e00] hover:bg-[#ff4e00]/05 transition-colors"
-                  >
-                    <LogOut size={13} />
-                    دەرچوون
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                    <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
+                      className="w-full text-right px-4 py-3 transition-colors hover:bg-[#ff4e00]/05"
+                      style={{ borderBottom: '1px solid var(--border-soft)' }}
+                    >
+                      <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{user.displayName || "کاربەر"}</p>
+                      <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
+                    </button>
+                    <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors hover:text-[#ff4e00]"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      <User size={13} /> دەستکاری پرۆفایل
+                    </button>
+                    <button onClick={() => { signOut(auth); setShowUserMenu(false); }}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors hover:text-[#ff4e00] hover:bg-[#ff4e00]/05"
+                      style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--border-soft)' }}
+                    >
+                      <LogOut size={13} /> دەرچوون
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+      {/* ── MOBILE BOTTOM NAV ── */}
+      <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-30 border-t flex" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
+        {([
+          ['transcribe', Mic, 'نووسینەوە'],
+          ['library', History, 'کتێبخانە'],
+          ['profile', User, 'پرۆفایل'],
+        ] as const).map(([tab, Icon, label]) => (
+          <button key={tab} onClick={() => setActiveTab(tab as any)}
+            className={`flex-1 flex flex-col items-center gap-1 py-3 transition-all relative ${activeTab === tab ? 'text-[#ff4e00]' : ''}`}
+            style={activeTab !== tab ? { color: 'var(--text-dim)' } : undefined}
+          >
+            {tab === 'library' && history.length > 0 && (
+              <span className="absolute top-2 right-[calc(50%-8px)] w-4 h-4 bg-[#ff4e00] text-white text-[9px] font-bold rounded-full flex items-center justify-center">{history.length}</span>
+            )}
+            <Icon size={20} />
+            <span className="text-[10px] font-medium">{label}</span>
+            {activeTab === tab && <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-[#ff4e00] rounded-full" />}
+          </button>
+        ))}
+      </nav>
+
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8 pb-24 sm:pb-8 space-y-6">
         {activeTab === 'transcribe' ? (
           <>
             {/* ── CONTROLS ── */}
