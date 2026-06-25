@@ -159,7 +159,7 @@ Rules:
       const resetKurdish = new Date(resetUTC.getTime() + 3 * 3600000);
       const kh = resetKurdish.getUTCHours().toString().padStart(2, '0');
       const km = resetKurdish.getUTCMinutes().toString().padStart(2, '0');
-      throw new Error(`کۆتای داواکاری ڕۆژانەی Gemini تەواو بووە. دووبارە دەستپێ دەکاتەوە لە ساعەت ${kh}:${km} کوردستان (${diffH} کاتژمێر و ${diffM} خولەک دیکە). تکایە مۆدێلی ElevenLabs Scribe بەکاربهێنە یان چاوەڕوانبە.`);
+      throw new Error(`کۆتای داواکاری ڕۆژانەی Gemini تەواو بووە. دووبارە دەستپێ دەکاتەوە لە ساعەت ${kh}:${km} بەیانی کوردستان (${diffH} کاتژمێر و ${diffM} خولەک دیکە). تکایە مۆدێلی ElevenLabs Scribe بەکاربهێنە یان چاوەڕوانبە.`);
     }
     throw lastError;
   } catch (error: any) {
