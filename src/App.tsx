@@ -453,6 +453,36 @@ export default function App() {
     return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   };
 
+  const transcribeSliderRange = async () => {
+    if (!audioBlob || !audioDuration) return;
+    const start = (sliderMin / 100) * audioDuration;
+    const end = (sliderMax / 100) * audioDuration;
+    if (start >= end) return;
+    setProcessStage('compressing');
+    try {
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioCtx = new AudioContext();
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+      const sampleRate = decoded.sampleRate;
+      const startSample = Math.floor(start * sampleRate);
+      const endSample = Math.min(Math.floor(end * sampleRate), decoded.length);
+      const frameCount = endSample - startSample;
+      const sliced = audioCtx.createBuffer(decoded.numberOfChannels, frameCount, sampleRate);
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+        const srcData = decoded.getChannelData(ch).subarray(startSample, endSample);
+        const dst = sliced.getChannelData(ch);
+        for (let i = 0; i < frameCount; i++) dst[i] = srcData[i];
+      }
+      audioCtx.close();
+      const wavBlob = audioBufferToWavBlob(sliced);
+      await runTranscription(wavBlob, targetLanguage, false);
+    } catch (err: any) {
+      setError(err.message || "هەڵەیەک ڕوویدا لە کاتی ئیدیتکردنی دەنگ.");
+      setIsTranscribing(false);
+      setProcessStage('idle');
+    }
+  };
+
   const transcribeRange = async () => {
     if (!audioBlob) return;
     const start = parseMMSS(rangeStart);
@@ -696,13 +726,6 @@ export default function App() {
                             }}
                           />
 
-                          {/* ── Range label pill ── */}
-                          <div className="flex justify-center">
-                            <div className="bg-[#1e3a5f] text-[#60a5fa] text-[11px] font-bold px-3 py-1 rounded-full tracking-wider">
-                              {Math.round(sliderMin)} — {Math.round(sliderMax)}
-                            </div>
-                          </div>
-
                           {/* ── Dual-range track ── */}
                           <div
                             ref={trackRef}
@@ -752,27 +775,20 @@ export default function App() {
                             />
                           </div>
 
-                          {/* ── Time labels ── */}
-                          <div className="flex justify-between text-[10px] font-mono text-[#555]">
-                            <span>{audioDuration > 0 ? fmtMMSS((sliderMin / 100) * audioDuration) : '00:00'}</span>
-                            <span className="text-[#888]">{audioDuration > 0 ? fmtMMSS((currentPct / 100) * audioDuration) : '--:--'}</span>
-                            <span>{audioDuration > 0 ? fmtMMSS((sliderMax / 100) * audioDuration) : '--:--'}</span>
-                          </div>
-
-                          {/* ── Play/Pause ── */}
-                          <div className="flex items-center justify-center gap-3">
-                            {/* Jump to start of range */}
+                          {/* ── Time labels + Play row ── */}
+                          <div className="flex items-center gap-3">
+                            {/* Jump to start + time */}
                             <button
-                              onClick={() => {
-                                const el = audioElRef.current;
-                                if (el && audioDuration) el.currentTime = (sliderMin / 100) * audioDuration;
-                              }}
-                              className="text-[#555] hover:text-white transition-colors"
-                              title="Jump to start"
+                              onClick={() => { const el = audioElRef.current; if (el && audioDuration) el.currentTime = (sliderMin / 100) * audioDuration; }}
+                              className="text-[#555] hover:text-white transition-colors shrink-0"
                             >
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
                             </button>
+                            <span className="text-[11px] font-mono text-[#888] shrink-0">
+                              {audioDuration > 0 ? fmtMMSS((sliderMin / 100) * audioDuration) : '00:00'}
+                            </span>
 
+                            {/* Play/Pause — centre */}
                             <button
                               onClick={() => {
                                 const el = audioElRef.current;
@@ -782,29 +798,41 @@ export default function App() {
                                   const maxTime = (sliderMax / 100) * audioDuration;
                                   if (el.currentTime < minTime || el.currentTime >= maxTime) el.currentTime = minTime;
                                   el.play();
-                                } else {
-                                  el.pause();
-                                }
+                                } else { el.pause(); }
                               }}
-                              className="w-10 h-10 flex items-center justify-center rounded-full bg-[#3b82f6] hover:bg-[#2563eb] text-white transition-colors shadow-[0_0_16px_rgba(59,130,246,0.35)]"
+                              className="mx-auto w-10 h-10 flex items-center justify-center rounded-full bg-[#3b82f6] hover:bg-[#2563eb] text-white transition-colors shadow-[0_0_16px_rgba(59,130,246,0.3)] shrink-0"
                             >
                               {isPlaying
                                 ? <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
                                 : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>}
                             </button>
 
-                            {/* Jump to end of range */}
+                            {/* end time + jump */}
+                            <span className="text-[11px] font-mono text-[#888] shrink-0">
+                              {audioDuration > 0 ? fmtMMSS((sliderMax / 100) * audioDuration) : '--:--'}
+                            </span>
                             <button
-                              onClick={() => {
-                                const el = audioElRef.current;
-                                if (el && audioDuration) el.currentTime = (sliderMax / 100) * audioDuration;
-                              }}
-                              className="text-[#555] hover:text-white transition-colors"
-                              title="Jump to end"
+                              onClick={() => { const el = audioElRef.current; if (el && audioDuration) el.currentTime = (sliderMax / 100) * audioDuration; }}
+                              className="text-[#555] hover:text-white transition-colors shrink-0"
                             >
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm2.5-6 5.5 3.9V8.1L8.5 12zM16 6h2v12h-2z"/></svg>
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm2.5-6 5.5 3.9V8.1L8.5 12zM16 6h2v12h-2z"/></svg>
                             </button>
                           </div>
+
+                          {/* ── Transcribe / Translate selected range ── */}
+                          {audioDuration > 0 && sliderMax > sliderMin && (
+                            <div className="flex gap-2 pt-1" dir="rtl">
+                              <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
+                                onClick={transcribeSliderRange}
+                                disabled={isTranscribing}
+                                className="flex-1 py-2.5 rounded-xl bg-[#ff4e00] text-white font-bold text-[11px] tracking-[0.12em] uppercase shadow-[0_0_16px_rgba(255,78,0,0.2)] hover:bg-[#e64600] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                              >
+                                {isTranscribing
+                                  ? <><Loader2 className="animate-spin" size={13} />چاوەڕوانبە...</>
+                                  : <>نووسینەوەی ئەم بەشە · {audioDuration > 0 ? fmtMMSS((sliderMin/100)*audioDuration) : ''} → {audioDuration > 0 ? fmtMMSS((sliderMax/100)*audioDuration) : ''}</>}
+                              </motion.button>
+                            </div>
+                          )}
                         </div>
                       )}
 
