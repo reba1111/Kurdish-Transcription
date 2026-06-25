@@ -564,7 +564,7 @@ export default function App() {
               >
                 {tab === 'transcribe' ? 'Transcribe' : tab === 'library' ? 'Library' : 'پرۆفایل'}
                 {tab === 'library' && history.length > 0 && (
-                  <span className={`mr-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${activeTab === 'library' ? 'bg-white/20' : 'bg-[#ffffff15]'}`}>{history.length}</span>
+                  <span className={`mr-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${activeTab === 'library' ? 'bg-white/20' : 'bg-[#ff4e00]/20 text-[#ff4e00]'}`}>{history.length}</span>
                 )}
               </button>
             ))}
@@ -610,7 +610,7 @@ export default function App() {
                     <p className="text-[10px] truncate" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
                   </button>
                   <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs hover:text-white hover:bg-[#ffffff05] transition-colors"
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs hover:text-[#ff4e00] transition-colors"
                     style={{ color: 'var(--text-muted)' }}
                   >
                     <User size={13} />
@@ -634,7 +634,7 @@ export default function App() {
           <>
             {/* ── CONTROLS ── */}
             <section className="rounded-2xl overflow-hidden shadow-2xl" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-              <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-[#ffffff08] border-b border-[#ffffff08]">
+              <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x border-b" style={{ borderColor: 'var(--border-soft)', '--tw-divide-opacity': 1 } as any}>
                 {/* Language */}
                 <div className="p-4 flex flex-col gap-2">
                   <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>زمان</span>
@@ -643,7 +643,8 @@ export default function App() {
                       style={{ right: targetLanguage === 'ku' ? '4px' : 'calc(50%)' }} />
                     {(['ku', 'ar'] as const).map(lang => (
                       <button key={lang} onClick={() => setTargetLanguage(lang)}
-                        className={`flex-1 py-2 text-sm font-medium transition-colors relative z-10 ${targetLanguage === lang ? 'text-white' : 'text-[#666] hover:text-[#aaa]'}`}
+                        className={`flex-1 py-2 text-sm font-medium transition-colors relative z-10 ${targetLanguage === lang ? 'text-white' : 'hover:text-[#ff4e00]'}`}
+                style={targetLanguage !== lang ? { color: 'var(--text-muted)' } : {}}
                       >{lang === 'ku' ? 'کوردی' : 'عەرەبی'}</button>
                     ))}
                   </div>
@@ -657,10 +658,10 @@ export default function App() {
                       className="w-full text-sm font-medium py-2.5 pl-3 pr-8 rounded-lg outline-none cursor-pointer appearance-none"
                       style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }} dir="ltr"
                     >
-                      <option value="gemini-pro" className="bg-[#1a1a1c]">Gemini 2.5 Pro ★</option>
-                      <option value="gemini" className="bg-[#1a1a1c]">Gemini 2.5 Flash</option>
-                      <option value="gemini-flash2" className="bg-[#1a1a1c]">Gemini 2.0 Flash</option>
-                      <option value="scribe" className="bg-[#1a1a1c]">ElevenLabs Scribe</option>
+                      <option value="gemini-pro" className="bg-card">Gemini 2.5 Pro ★</option>
+                      <option value="gemini" className="bg-card">Gemini 2.5 Flash</option>
+                      <option value="gemini-flash2" className="bg-card">Gemini 2.0 Flash</option>
+                      <option value="scribe" className="bg-card">ElevenLabs Scribe</option>
                     </select>
                     <ChevronDown size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-dim)' }} />
                   </div>
@@ -686,12 +687,13 @@ export default function App() {
                   {!isRecording ? (
                     <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
                       onClick={startRecording} disabled={isTranscribing}
-                      className="flex flex-col items-center gap-3 p-5 sm:p-7 rounded-2xl bg-[#1a1a1c] border border-[#ffffff08] hover:border-[#ff4e00]/30 hover:bg-[#1e1e20] transition-all disabled:opacity-40 group"
+                      className="flex flex-col items-center gap-3 p-5 sm:p-7 rounded-2xl transition-all disabled:opacity-40 group border"
+                      style={{ background: 'var(--bg-hover)', borderColor: 'var(--border)' }}
                     >
                       <div className="p-3.5 sm:p-4 bg-[#ff4e00] text-white rounded-full ring-4 ring-[#ff4e00]/15 group-hover:ring-[#ff4e00]/30 group-hover:scale-105 transition-all">
                         <Mic size={22} />
                       </div>
-                      <span className="text-[10px] sm:text-xs uppercase tracking-widest text-[#666] font-bold">تۆمارکردن</span>
+                      <span className="text-[10px] sm:text-xs uppercase tracking-widest font-bold" style={{ color: 'var(--text-muted)' }}>تۆمارکردن</span>
                     </motion.button>
                   ) : (
                     <motion.button animate={{ scale: [1, 1.03, 1], transition: { repeat: Infinity, duration: 1.5 } }}
@@ -705,11 +707,11 @@ export default function App() {
                     </motion.button>
                   )}
 
-                  <label className="flex flex-col items-center gap-3 p-5 sm:p-7 rounded-2xl bg-[#0f0f11] border border-dashed border-[#ffffff12] hover:border-[#ffffff25] hover:bg-[#141416] transition-all cursor-pointer">
-                    <div className="p-3.5 sm:p-4 bg-[#1a1a1c] border border-[#ffffff10] text-[#aaa] rounded-full">
+                  <label className="flex flex-col items-center gap-3 p-5 sm:p-7 rounded-2xl border border-dashed transition-all cursor-pointer" style={{ background: 'var(--bg-hover)', borderColor: 'var(--border)' }}>
+                    <div className="p-3.5 sm:p-4 rounded-full border" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
                       <Upload size={22} />
                     </div>
-                    <span className="text-[10px] sm:text-xs uppercase tracking-widest font-bold text-[#666]">بارکردنی فایل</span>
+                    <span className="text-[10px] sm:text-xs uppercase tracking-widest font-bold" style={{ color: 'var(--text-muted)' }}>بارکردنی فایل</span>
                     <input type="file" accept="audio/*" onChange={handleFileUpload} className="hidden" disabled={isTranscribing} />
                   </label>
                 </div>
@@ -893,7 +895,7 @@ export default function App() {
                           {isTranscribing && (
                             <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
                               onClick={cancelTranscription}
-                              className="px-4 py-3.5 rounded-xl bg-[#1a1a1c] border border-[#ff4e00]/30 text-[#ff4e00] text-xs font-bold uppercase tracking-wider hover:bg-[#ff4e00]/10 transition-all flex items-center gap-1.5"
+                              className="px-4 py-3.5 rounded-xl bg-card border border-[#ff4e00]/30 text-[#ff4e00] text-xs font-bold uppercase tracking-wider hover:bg-[#ff4e00]/10 transition-all flex items-center gap-1.5"
                             >
                               <X size={14} />ڕاگرتن
                             </motion.button>
@@ -938,23 +940,23 @@ export default function App() {
                           return !p;
                         });
                       }}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all ${isEditingTranscription ? 'bg-[#ff4e00]/20 border border-[#ff4e00]/50 text-[#ff4e00]' : 'bg-[#1a1a1c] border border-[#ffffff10] text-[#bbb] hover:bg-[#222]'}`}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all ${isEditingTranscription ? 'bg-[#ff4e00]/20 border border-[#ff4e00]/50 text-[#ff4e00]' : 'bg-card border border-[#ffffff10] text-[#bbb] hover:bg-[#222]'}`}
                       >
                         {isEditingTranscription ? <><X size={12} />داخستن</> : <><Pencil size={12} />دەستکاری</>}
                       </button>
                       <button onClick={summarizeText} disabled={isSummarizing}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all disabled:opacity-50 ${showSummary ? 'bg-[#a855f7]/20 border border-[#a855f7]/50 text-[#a855f7]' : 'bg-[#1a1a1c] border border-[#ffffff10] text-[#bbb] hover:bg-[#a855f7]/10 hover:border-[#a855f7]/30 hover:text-[#a855f7]'}`}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all disabled:opacity-50 ${showSummary ? 'bg-[#a855f7]/20 border border-[#a855f7]/50 text-[#a855f7]' : 'bg-card border border-[#ffffff10] text-[#bbb] hover:bg-[#a855f7]/10 hover:border-[#a855f7]/30 hover:text-[#a855f7]'}`}
                       >
                         {isSummarizing ? <><Loader2 size={12} className="animate-spin" />پوختەکردن...</> : <><Sparkles size={12} />پوختەکردن</>}
                       </button>
                       <button onClick={() => copyText(transcription)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1a1a1c] border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#222] text-[#bbb] transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-card border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#222] text-[#bbb] transition-colors"
                       >
                         {copied ? <><Check size={12} className="text-green-400" />COPIED</> : <><Copy size={12} />COPY</>}
                       </button>
                       <div className="relative">
                         <button onClick={() => setShowExportMenu(p => !p)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1a1a1c] border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#ff4e00]/15 hover:border-[#ff4e00]/40 hover:text-[#ff4e00] text-[#bbb] transition-all"
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-card border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#ff4e00]/15 hover:border-[#ff4e00]/40 hover:text-[#ff4e00] text-[#bbb] transition-all"
                         >
                           <Download size={12} />EXPORT<ChevronDown size={10} className={`transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
                         </button>
@@ -998,7 +1000,7 @@ export default function App() {
                       </div>
                       <div className="relative">
                         <button onClick={() => setShowShareMenu(p => !p)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1a1a1c] border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#22c55e]/10 hover:border-[#22c55e]/30 hover:text-[#22c55e] text-[#bbb] transition-all"
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-card border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#22c55e]/10 hover:border-[#22c55e]/30 hover:text-[#22c55e] text-[#bbb] transition-all"
                         >
                           <Share2 size={12} />SHARE<ChevronDown size={10} className={`transition-transform ${showShareMenu ? 'rotate-180' : ''}`} />
                         </button>
@@ -1152,7 +1154,7 @@ export default function App() {
                         {new Date(item.timestamp).toLocaleDateString()} {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                       <div className="flex gap-1.5 shrink-0">
-                        {item.model && <span className="bg-[#1a1a1c] px-1.5 py-0.5 rounded text-[9px] text-[#666] border border-[#ffffff12] uppercase">{item.model}</span>}
+                        {item.model && <span className="bg-card px-1.5 py-0.5 rounded text-[9px] text-[#666] border border-[#ffffff12] uppercase">{item.model}</span>}
                         <span className="bg-[#ff4e00]/10 px-1.5 py-0.5 rounded text-[9px] text-[#ff4e00] border border-[#ff4e00]/20 uppercase">{item.language === 'ku' ? 'KU' : 'AR'}</span>
                       </div>
                     </div>
@@ -1161,14 +1163,14 @@ export default function App() {
                       <span className="text-[10px] font-mono" style={{ color: 'var(--text-faintest)' }}>#{item.id.slice(-6)}</span>
                       <div className="flex gap-1.5">
                         <button onClick={() => setDeleteConfirmId(item.id)}
-                          className="p-1.5 text-[#444] hover:text-[#ff4e00] bg-[#1a1a1c] border border-[#ffffff08] rounded-lg transition-colors"
+                          className="p-1.5 text-[#444] hover:text-[#ff4e00] bg-card border border-[#ffffff08] rounded-lg transition-colors"
                         ><Trash2 size={12} /></button>
                         <button onClick={() => copyText(item.text, item.id)}
-                          className="p-1.5 text-[#444] hover:text-white bg-[#1a1a1c] border border-[#ffffff08] rounded-lg transition-colors"
+                          className="p-1.5 text-[#444] hover:text-white bg-card border border-[#ffffff08] rounded-lg transition-colors"
                         >{copiedId === item.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}</button>
                         <button onClick={() => exportText('txt', item.text)}
                           title="دابگرە بە .TXT"
-                          className="p-1.5 text-[#444] hover:text-[#ff4e00] bg-[#1a1a1c] border border-[#ffffff08] rounded-lg transition-colors"
+                          className="p-1.5 text-[#444] hover:text-[#ff4e00] bg-card border border-[#ffffff08] rounded-lg transition-colors"
                         ><Download size={12} /></button>
                       </div>
                     </div>
