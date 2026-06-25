@@ -585,10 +585,12 @@ export default function App() {
                 <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }}
                   className="absolute left-0 top-full mt-2 w-48 bg-[#141416] border border-[#ffffff12] rounded-xl shadow-2xl overflow-hidden z-50"
                 >
-                  <div className="px-3 py-2.5 border-b border-[#ffffff08]">
+                  <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
+                    className="w-full text-right px-3 py-2.5 border-b border-[#ffffff08] hover:bg-[#ffffff05] transition-colors"
+                  >
                     <p className="text-xs text-white font-medium truncate">{user.displayName || "کاربەر"}</p>
                     <p className="text-[10px] text-[#555] truncate">{user.email}</p>
-                  </div>
+                  </button>
                   <button onClick={() => { signOut(auth); setShowUserMenu(false); }}
                     className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-[#888] hover:text-[#ff4e00] hover:bg-[#ff4e00]/05 transition-colors"
                   >
