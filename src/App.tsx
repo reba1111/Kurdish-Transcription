@@ -43,6 +43,7 @@ export default function App() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
+  const [openLibraryExport, setOpenLibraryExport] = useState<string | null>(null);
   const [isEditingTranscription, setIsEditingTranscription] = useState(false);
   const [librarySearch, setLibrarySearch] = useState('');
   const [summary, setSummary] = useState<string>('');
@@ -65,6 +66,20 @@ export default function App() {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const userMenuMobileRef = useRef<HTMLDivElement>(null);
+  const userMenuDesktopRef = useRef<HTMLDivElement>(null);
+
+  // Close menus on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node;
+      const inMobile = userMenuMobileRef.current?.contains(t);
+      const inDesktop = userMenuDesktopRef.current?.contains(t);
+      if (!inMobile && !inDesktop) setShowUserMenu(false);
+    };
+    if (showUserMenu) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showUserMenu]);
 
   // Auth listener
   useEffect(() => {
@@ -152,27 +167,22 @@ export default function App() {
     }).catch(err => {
       console.error("Firestore error:", err);
       if (err?.code === 'permission-denied') {
-        setError("مێژووەکان نەخوێندرانەوە: تکایە Firestore Security Rules لە Firebase Console دابنێ.");
+        setError("تۆمارەکان نەخوێندرانەوە: تکایە Firestore Security Rules لە Firebase Console دابنێ.");
       }
     }).finally(() => setHistoryLoading(false));
   }, [user]);
 
   const saveToHistory = async (item: Omit<HistoryItem, 'id'>) => {
-    if (!user) {
-      console.warn("saveToHistory: user not logged in, skipping");
-      return;
-    }
-    console.log("saveToHistory: saving to Firestore...", { uid: user.uid, item });
+    if (!user) return;
     try {
       const ref = await addDoc(collection(db, "users", user.uid, "history"), item);
-      console.log("saveToHistory: saved successfully, id=", ref.id);
       setHistory(prev => [{ id: ref.id, ...item }, ...prev].slice(0, 100));
     } catch (err: any) {
       console.error("saveToHistory ERROR:", err.code, err.message);
       if (err?.code === 'permission-denied') {
-        setError("مێژوو خەزن نەکرا: تکایە Firestore Rules لە Firebase Console دابنێ. بڕوانە README.");
+        setError("تۆمار خەزن نەکرا: تکایە Firestore Rules لە Firebase Console دابنێ.");
       } else {
-        setError(`مێژوو خەزن نەکرا: ${err.message}`);
+        setError(`تۆمار خەزن نەکرا: ${err.message}`);
       }
     }
   };
@@ -458,12 +468,6 @@ export default function App() {
     setSliderMin(0); setSliderMax(100); setCurrentPct(0); setIsPlaying(false);
   };
 
-  const parseMMSS = (val: string): number => {
-    const parts = val.trim().split(':');
-    if (parts.length === 2) return parseInt(parts[0]) * 60 + parseFloat(parts[1]);
-    return parseFloat(val) || 0;
-  };
-
   const fmtMMSS = (sec: number): string => {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
@@ -545,7 +549,7 @@ export default function App() {
 
       {/* ── HEADER ── */}
       <header className="sticky top-0 z-30 border-b" style={{ background: 'var(--bg-base)', borderColor: 'var(--border)' }}>
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-3">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-3 relative">
 
           {/* Logo — click to go home */}
           <button onClick={() => setActiveTab('transcribe')} className="flex items-center gap-2.5 shrink-0" dir="ltr">
@@ -564,7 +568,7 @@ export default function App() {
                 className={`relative px-4 py-2 text-sm font-medium transition-all rounded-lg ${activeTab === tab ? 'text-[#ff4e00]' : 'hover:bg-[#ff4e00]/05'}`}
                 style={activeTab !== tab ? { color: 'var(--text-muted)' } : undefined}
               >
-                {tab === 'transcribe' ? 'Transcribe' : tab === 'library' ? 'Library' : 'پرۆفایل'}
+                {tab === 'transcribe' ? 'نووسینەوە' : tab === 'library' ? 'کتێبخانە' : 'پرۆفایل'}
                 {tab === 'library' && history.length > 0 && (
                   <span className="mr-1.5 text-[9px] px-1.5 py-0.5 rounded-full bg-[#ff4e00] text-white">{history.length}</span>
                 )}
@@ -576,18 +580,87 @@ export default function App() {
           {/* Right: mobile hamburger + desktop user menu */}
           <div className="flex items-center gap-2" dir="ltr">
 
-            {/* Mobile: hamburger only */}
-            <button onClick={() => setShowUserMenu(p => !p)}
-              className="flex sm:hidden flex-col gap-1.5 justify-center items-center w-9 h-9 rounded-lg transition-colors"
-              style={{ border: '1px solid var(--border)' }}
-            >
-              <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
-              <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
-              <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
-            </button>
+            {/* Mobile: hamburger only — dropdown anchored below this button */}
+            <div className="relative sm:hidden" ref={userMenuMobileRef}>
+              <button onClick={() => setShowUserMenu(p => !p)}
+                className="flex flex-col gap-1.5 justify-center items-center w-9 h-9 rounded-lg transition-colors"
+                style={{ border: '1px solid var(--border)' }}
+              >
+                <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
+                <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
+                <span className="w-4 h-0.5 rounded-full" style={{ background: 'var(--text-muted)' }} />
+              </button>
+              <AnimatePresence>
+                {showUserMenu && (
+                  <motion.div initial={{ opacity: 0, y: 6, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.97 }}
+                    className="absolute left-0 top-full mt-2 w-64 rounded-xl shadow-2xl overflow-hidden z-50"
+                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+                  >
+                    {/* User info */}
+                    <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 transition-colors hover:bg-[#ff4e00]/05"
+                      style={{ borderBottom: '1px solid var(--border-soft)' }}
+                    >
+                      {user.photoURL
+                        ? <img src={user.photoURL} className="w-10 h-10 rounded-full ring-2 ring-[#ff4e00]/20 shrink-0" alt="" />
+                        : <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#ff4e00] to-[#ff7a40] flex items-center justify-center text-white text-sm font-bold shrink-0">
+                            {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                          </div>
+                      }
+                      <div className="text-right min-w-0">
+                        <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{user.displayName || "کاربەر"}</p>
+                        <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
+                      </div>
+                    </button>
+                    {/* Mobile tabs */}
+                    <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                      <p className="text-[10px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>بەشەکان</p>
+                      <div className="flex gap-1">
+                        {([['transcribe', Mic, 'نووسینەوە'], ['library', History, 'کتێبخانە'], ['profile', User, 'پرۆفایل']] as const).map(([tab, Icon, label]) => (
+                          <button key={tab} onClick={() => { setActiveTab(tab as any); setShowUserMenu(false); }}
+                            className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:bg-[#ff4e00]/10'}`}
+                            style={activeTab !== tab ? { color: 'var(--text-muted)', border: '1px solid var(--border)' } : {}}
+                          >
+                            <Icon size={13} />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Theme */}
+                    <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                      <p className="text-[10px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>تیم</p>
+                      <div className="flex gap-1">
+                        {([['dark', Moon, 'تاریک'], ['light', Sun, 'ڕووناک'], ['system', Monitor, 'ئۆتۆ']] as const).map(([t, Icon, label]) => (
+                          <button key={t} onClick={() => setTheme(t)}
+                            className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] transition-all ${theme === t ? 'bg-[#ff4e00] text-white' : 'hover:bg-[#ff4e00]/10'}`}
+                            style={theme !== t ? { color: 'var(--text-muted)', border: '1px solid var(--border)' } : {}}
+                          >
+                            <Icon size={13} />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <button onClick={() => { setActiveTab('profile'); setShowUserMenu(false); }}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors hover:text-[#ff4e00]"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      <User size={13} /> دەستکاری پرۆفایل
+                    </button>
+                    <button onClick={() => { signOut(auth); setShowUserMenu(false); }}
+                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors hover:text-[#ff4e00] hover:bg-[#ff4e00]/05"
+                      style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--border-soft)' }}
+                    >
+                      <LogOut size={13} /> دەرچوون
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
-            {/* Desktop: full user button */}
-            <div className="relative hidden sm:block shrink-0">
+            {/* Desktop: full user button + dropdown */}
+            <div className="relative hidden sm:block shrink-0" ref={userMenuDesktopRef}>
               <button onClick={() => setShowUserMenu(p => !p)}
                 className="flex items-center gap-2 rounded-xl px-3 py-1.5 transition-all hover:bg-[#ff4e00]/08"
                 style={{ border: '1px solid var(--border)' }}
@@ -603,13 +676,12 @@ export default function App() {
                 </span>
                 <ChevronDown size={12} style={{ color: 'var(--text-dim)' }} />
               </button>
-            </div>
 
-            {/* Dropdown (shared mobile+desktop) */}
+            {/* Dropdown desktop */}
             <AnimatePresence>
               {showUserMenu && (
                 <motion.div initial={{ opacity: 0, y: 6, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.97 }}
-                  className="absolute right-4 top-14 sm:top-full sm:right-0 sm:mt-2 w-56 rounded-xl shadow-2xl overflow-hidden z-50"
+                  className="absolute right-0 top-full mt-2 w-56 rounded-xl shadow-2xl overflow-hidden z-50"
                   style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
                 >
                   {/* User info */}
@@ -628,22 +700,6 @@ export default function App() {
                       <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-dim)' }}>{user.email}</p>
                     </div>
                   </button>
-
-                  {/* Mobile tabs inside menu */}
-                  <div className="sm:hidden px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
-                    <p className="text-[10px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>بەشەکان</p>
-                    <div className="flex gap-1">
-                      {([['transcribe', Mic, 'نووسینەوە'], ['library', History, 'کتێبخانە'], ['profile', User, 'پرۆفایل']] as const).map(([tab, Icon, label]) => (
-                        <button key={tab} onClick={() => { setActiveTab(tab as any); setShowUserMenu(false); }}
-                          className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:bg-[#ff4e00]/10'}`}
-                          style={activeTab !== tab ? { color: 'var(--text-muted)', border: '1px solid var(--border)' } : {}}
-                        >
-                          <Icon size={13} />
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
 
                   {/* Theme selector */}
                   <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
@@ -679,6 +735,7 @@ export default function App() {
                 </motion.div>
               )}
             </AnimatePresence>
+            </div>
           </div>
         </div>
       </header>
@@ -709,7 +766,7 @@ export default function App() {
           <>
             {/* ── CONTROLS ── */}
             <section className="rounded-2xl overflow-hidden shadow-2xl" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-              <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x border-b" style={{ borderColor: 'var(--border-soft)', '--tw-divide-opacity': 1 } as any}>
+              <div className="grid grid-cols-1 sm:grid-cols-3 border-b" style={{ borderColor: 'var(--border-soft)' }}>
                 {/* Language */}
                 <div className="p-4 flex flex-col gap-2">
                   <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>زمان</span>
@@ -798,7 +855,7 @@ export default function App() {
                         <div className="flex items-center gap-3 min-w-0">
                           <FileAudio size={16} className="text-[#ff4e00] shrink-0" />
                           <div className="min-w-0">
-                            <p className="text-xs font-mono truncate" style={{ color: 'var(--text-primary)' }} dir="ltr">AUDIO_INPUT</p>
+                            <p className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>فایلی دەنگ</p>
                             <p className="text-[10px] font-mono" style={{ color: 'var(--text-dim)' }} dir="ltr">{(audioBlob.size / (1024 * 1024)).toFixed(2)} MB</p>
                           </div>
                         </div>
@@ -962,9 +1019,9 @@ export default function App() {
                       <div className="flex gap-2" dir="ltr">
                         <motion.button whileHover={{ scale: isTranscribing ? 1 : 1.01 }} whileTap={{ scale: 0.98 }}
                           onClick={() => transcribeAudio()} disabled={isTranscribing}
-                          className="flex-1 py-3.5 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.15em] uppercase shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5"
+                          className="flex-1 py-3.5 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.08em] shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5"
                         >
-                          TRANSCRIBE AUDIO
+                          گۆڕینی دەنگ بە نووسین
                         </motion.button>
                         <AnimatePresence>
                           {isTranscribing && (
@@ -998,9 +1055,9 @@ export default function App() {
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-7 py-4" style={{ borderBottom: '1px solid var(--border-soft)' }} dir="ltr">
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>Transcription Output</span>
+                      <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>ئەنجامی نووسینەوە</span>
                       {isEditingTranscription && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#ff4e00]/15 border border-[#ff4e00]/30 text-[#ff4e00] uppercase tracking-wider font-bold">editing</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#ff4e00]/15 border border-[#ff4e00]/30 text-[#ff4e00] tracking-wider font-bold">دەستکاریکردن</span>
                       )}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
@@ -1017,7 +1074,7 @@ export default function App() {
                       }}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all ${isEditingTranscription ? 'bg-[#ff4e00]/20 border border-[#ff4e00]/50 text-[#ff4e00]' : 'bg-card border border-[#ffffff10] text-[#bbb] hover:bg-[#222]'}`}
                       >
-                        {isEditingTranscription ? <><X size={12} />داخستن</> : <><Pencil size={12} />دەستکاری</>}
+                        {isEditingTranscription ? <><X size={12} />داخستن</> : <><Pencil size={12} />دەستکاریکردن</>}
                       </button>
                       <button onClick={summarizeText} disabled={isSummarizing}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all disabled:opacity-50 ${showSummary ? 'bg-[#a855f7]/20 border border-[#a855f7]/50 text-[#a855f7]' : 'bg-card border border-[#ffffff10] text-[#bbb] hover:bg-[#a855f7]/10 hover:border-[#a855f7]/30 hover:text-[#a855f7]'}`}
@@ -1027,13 +1084,13 @@ export default function App() {
                       <button onClick={() => copyText(transcription)}
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-card border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#222] text-[#bbb] transition-colors"
                       >
-                        {copied ? <><Check size={12} className="text-green-400" />COPIED</> : <><Copy size={12} />COPY</>}
+                        {copied ? <><Check size={12} className="text-green-400" />کۆپیکرا</> : <><Copy size={12} />کۆپی</>}
                       </button>
                       <div className="relative">
                         <button onClick={() => setShowExportMenu(p => !p)}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-card border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#ff4e00]/15 hover:border-[#ff4e00]/40 hover:text-[#ff4e00] text-[#bbb] transition-all"
                         >
-                          <Download size={12} />EXPORT<ChevronDown size={10} className={`transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
+                          <Download size={12} />داگرتن<ChevronDown size={10} className={`transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
                         </button>
                         <AnimatePresence>
                           {showExportMenu && (
@@ -1044,7 +1101,7 @@ export default function App() {
                               {([
                                 { fmt: 'txt', label: 'دابگرە بە .TXT', sub: 'تێکستی سادە' },
                                 { fmt: 'docx', label: 'دابگرە بە .DOC', sub: 'بۆ Microsoft Word' },
-                                { fmt: 'pdf', label: 'چاپکردن / PDF', sub: 'Print & Save as PDF' },
+                                { fmt: 'pdf', label: 'چاپکردن / PDF', sub: 'چاپ و خەزنکردن بە PDF' },
                               ] as const).map(({ fmt, label, sub }) => (
                                 <button key={fmt} onClick={() => exportText(fmt, transcription)}
                                   className="w-full flex flex-col items-start px-4 py-3 text-right hover:bg-[#ff4e00]/10 transition-colors border-b border-[#ffffff06] last:border-0"
@@ -1064,7 +1121,7 @@ export default function App() {
                                         {isExportingSubtitles ? <Loader2 size={10} className="animate-spin" /> : null}
                                         دابگرە بە .{fmt.toUpperCase()}
                                       </span>
-                                      <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>{fmt === 'srt' ? 'SubRip — بۆ زۆربەی پلەیەرەکان' : 'WebVTT — بۆ وێب و YouTube'}</span>
+                                      <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>{fmt === 'srt' ? 'بۆ زۆربەی پلەیەرەکان' : 'بۆ وێب و یوتیوب'}</span>
                                     </button>
                                   ))}
                                 </div>
@@ -1077,7 +1134,7 @@ export default function App() {
                         <button onClick={() => setShowShareMenu(p => !p)}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-card border border-[#ffffff10] rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#22c55e]/10 hover:border-[#22c55e]/30 hover:text-[#22c55e] text-[#bbb] transition-all"
                         >
-                          <Share2 size={12} />SHARE<ChevronDown size={10} className={`transition-transform ${showShareMenu ? 'rotate-180' : ''}`} />
+                          <Share2 size={12} />بەشکردن<ChevronDown size={10} className={`transition-transform ${showShareMenu ? 'rotate-180' : ''}`} />
                         </button>
                         <AnimatePresence>
                           {showShareMenu && (
@@ -1088,7 +1145,7 @@ export default function App() {
                               {([
                                 { plt: 'telegram', label: 'بناردە تێلیگرام', sub: 'Telegram', icon: '✈️' },
                                 { plt: 'whatsapp', label: 'بناردە واتساپ', sub: 'WhatsApp', icon: '💬' },
-                                { plt: 'native', label: 'بەشکردن...', sub: navigator.share ? 'Share Sheet' : 'کۆپی دەکات', icon: '↗️' },
+                                { plt: 'native', label: 'بەشکردن...', sub: navigator.share ? 'بەشکردن' : 'کۆپی دەکات', icon: '↗️' },
                               ] as const).map(({ plt, label, sub, icon }) => (
                                 <button key={plt} onClick={() => shareText(plt, transcription)}
                                   className="w-full flex items-center gap-3 px-4 py-3 text-right hover:bg-[#22c55e]/08 transition-colors border-b border-[#ffffff06] last:border-0"
@@ -1138,7 +1195,7 @@ export default function App() {
                             </div>
                             <div className="flex gap-2">
                               {summary && !isSummarizing && (
-                                <button onClick={() => copyText(summary)} className="text-[10px] text-[#555] hover:text-[#a855f7] transition-colors uppercase tracking-wider">کۆپی</button>
+                                <button onClick={() => copyText(summary)} className="text-[10px] text-[#555] hover:text-[#a855f7] transition-colors tracking-wider">کۆپیکردن</button>
                               )}
                               <button onClick={() => setShowSummary(false)} className="text-[#555] hover:text-white transition-colors"><X size={13} /></button>
                             </div>
@@ -1146,7 +1203,7 @@ export default function App() {
                           {isSummarizing && !summary ? (
                             <div className="flex items-center gap-2 text-[#666] text-sm py-2">
                               <Loader2 size={14} className="animate-spin text-[#a855f7]" />
-                              <span>Gemini پوختەکان دەردەهێنێت...</span>
+                              <span>پوختەکردن...</span>
                             </div>
                           ) : (
                             <p className="text-base leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--text-primary)' }}>{summary}</p>
@@ -1157,7 +1214,7 @@ export default function App() {
                   </AnimatePresence>
                   <div className="px-5 sm:px-7 pb-5 flex items-center gap-3" dir="ltr">
                     <div className="flex-1 h-px bg-[#ff4e00]/40 rounded-full" />
-                    <span className="text-[10px] font-mono tracking-widest" style={{ color: 'var(--text-faintest)' }}>{isEditingTranscription ? 'EDITING' : 'COMPLETE'}</span>
+                    <span className="text-[10px] tracking-widest" style={{ color: 'var(--text-faintest)' }}>{isEditingTranscription ? 'دەستکاریکردن' : 'تەواوبوو'}</span>
                   </div>
                 </motion.section>
               )}
@@ -1172,7 +1229,7 @@ export default function App() {
             <div className="flex items-center justify-between px-5 sm:px-7 py-4" style={{ borderBottom: '1px solid var(--border-soft)' }}>
               <div className="flex items-center gap-2">
                 <History size={15} style={{ color: 'var(--text-dim)' }} />
-                <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }} dir="ltr">Transcription Library</span>
+                <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>کتێبخانەی نووسینەوەکان</span>
                 {history.length > 0 && (
                   <span className="text-[10px] px-2 py-0.5 bg-[#ffffff08] rounded-full text-[#666]">
                     {librarySearch ? `${history.filter(h => h.text.toLowerCase().includes(librarySearch.toLowerCase())).length} / ${history.length}` : history.length}
@@ -1183,7 +1240,7 @@ export default function App() {
                 <button onClick={() => setDeleteConfirmId('all')}
                   className="flex items-center gap-1.5 text-[#555] hover:text-[#ff4e00] transition-colors text-[10px] uppercase tracking-wider"
                 >
-                  <Trash2 size={13} />سڕینەوەی هەمووی
+                  <Trash2 size={13} />سڕینەوەی هەموو تۆمارەکان
                 </button>
               )}
             </div>
@@ -1230,7 +1287,7 @@ export default function App() {
                       </span>
                       <div className="flex gap-1.5 shrink-0">
                         {item.model && <span className="bg-card px-1.5 py-0.5 rounded text-[9px] text-[#666] border border-[#ffffff12] uppercase">{item.model}</span>}
-                        <span className="bg-[#ff4e00]/10 px-1.5 py-0.5 rounded text-[9px] text-[#ff4e00] border border-[#ff4e00]/20 uppercase">{item.language === 'ku' ? 'KU' : 'AR'}</span>
+                        <span className="bg-[#ff4e00]/10 px-1.5 py-0.5 rounded text-[9px] text-[#ff4e00] border border-[#ff4e00]/20">{item.language === 'ku' ? 'کوردی' : 'عەرەبی'}</span>
                       </div>
                     </div>
                     <p className="text-base leading-relaxed line-clamp-4 flex-1" style={{ color: 'var(--text-primary)' }}>{item.text}</p>
@@ -1243,10 +1300,41 @@ export default function App() {
                         <button onClick={() => copyText(item.text, item.id)}
                           className="p-1.5 text-[#444] hover:text-white bg-card border border-[#ffffff08] rounded-lg transition-colors"
                         >{copiedId === item.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}</button>
-                        <button onClick={() => exportText('txt', item.text)}
-                          title="دابگرە بە .TXT"
-                          className="p-1.5 text-[#444] hover:text-[#ff4e00] bg-card border border-[#ffffff08] rounded-lg transition-colors"
-                        ><Download size={12} /></button>
+                        {/* Export dropdown */}
+                        <div className="relative">
+                          <button
+                            onClick={() => setOpenLibraryExport(openLibraryExport === item.id ? null : item.id)}
+                            className="flex items-center gap-1 px-2 py-1.5 text-[#444] hover:text-[#ff4e00] bg-card border border-[#ffffff08] rounded-lg transition-colors"
+                          >
+                            <Download size={12} />
+                            <ChevronDown size={10} className={`transition-transform ${openLibraryExport === item.id ? 'rotate-180' : ''}`} />
+                          </button>
+                          <AnimatePresence>
+                            {openLibraryExport === item.id && (
+                              <motion.div
+                                initial={{ opacity: 0, y: 4, scale: 0.95 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, y: 4, scale: 0.95 }}
+                                className="absolute left-0 bottom-full mb-1.5 w-44 rounded-xl shadow-2xl overflow-hidden z-50"
+                                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+                              >
+                                {([
+                                  { fmt: 'txt', label: 'داگرتن بە .TXT', sub: 'تێکستی سادە' },
+                                  { fmt: 'docx', label: 'داگرتن بە .DOC', sub: 'Microsoft Word' },
+                                  { fmt: 'pdf', label: 'چاپکردن / PDF', sub: 'چاپ و خەزنکردن' },
+                                ] as const).map(({ fmt, label, sub }) => (
+                                  <button key={fmt}
+                                    onClick={() => { exportText(fmt, item.text); setOpenLibraryExport(null); }}
+                                    className="w-full flex flex-col items-start px-3 py-2.5 text-right hover:bg-[#ff4e00]/10 transition-colors border-b border-[#ffffff06] last:border-0"
+                                  >
+                                    <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
+                                    <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>{sub}</span>
+                                  </button>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1262,7 +1350,7 @@ export default function App() {
             })() : (
               <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
                 <History size={40} className="text-[#ffffff08] mb-4" />
-                <p className="text-[#444] text-sm">هیچ مێژوویەک بوونی نییە</p>
+                <p className="text-[#444] text-sm">هیچ تۆمارێک بوونی نییە</p>
               </div>
             )}
           </motion.section>
@@ -1271,9 +1359,8 @@ export default function App() {
         ) : null}
       </main>
 
-      <footer className="max-w-5xl mx-auto px-4 sm:px-6 py-8 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-faintest)' }} dir="ltr">
-        <span>KurdishTranscription</span>
-        <span>Powered by Gemini AI</span>
+      <footer className="max-w-5xl mx-auto px-4 sm:px-6 py-8 flex items-center justify-between text-[10px] tracking-widest" style={{ color: 'var(--text-faintest)' }} dir="rtl">
+        <span>کوردیشتراسکریپشن</span>
       </footer>
 
       {/* Cookie Error Modal */}
@@ -1310,10 +1397,10 @@ export default function App() {
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
             >
               <h3 className="text-lg font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
-                {deleteConfirmId === 'all' ? 'سڕینەوەی هەموو مێژووەکە' : 'سڕینەوەی مێژوو'}
+                {deleteConfirmId === 'all' ? 'سڕینەوەی هەموو تۆمارەکان' : 'سڕینەوەی تۆمار'}
               </h3>
               <p className="text-sm mb-5 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                {deleteConfirmId === 'all' ? 'دڵنیای کە دەتەوێت هەموو مێژووەکە بسڕیتەوە؟' : 'دڵنیای کە دەتەوێت ئەم مێژووە بسڕیتەوە؟'}
+                {deleteConfirmId === 'all' ? 'دڵنیای کە دەتەوێت هەموو تۆمارەکان بسڕیتەوە؟' : 'دڵنیای کە دەتەوێت ئەم تۆمارە بسڕیتەوە؟'}
               </p>
               <div className="flex gap-2 justify-end">
                 <button onClick={() => setDeleteConfirmId(null)} className="px-4 py-2 text-sm hover:text-white transition-colors rounded-lg" style={{ color: 'var(--text-muted)' }}>پاشگەزبوونەوە</button>
@@ -1324,12 +1411,13 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Close user menu on outside click */}
-      {showUserMenu && <div className="fixed inset-0 z-20" onClick={() => setShowUserMenu(false)} />}
+      {/* user menu closed via useEffect mousedown */}
       {/* Close export menu on outside click */}
       {showExportMenu && <div className="fixed inset-0 z-20" onClick={() => setShowExportMenu(false)} />}
       {/* Close share menu on outside click */}
       {showShareMenu && <div className="fixed inset-0 z-20" onClick={() => setShowShareMenu(false)} />}
+      {/* Close library export dropdown on outside click */}
+      {openLibraryExport && <div className="fixed inset-0 z-40" onClick={() => setOpenLibraryExport(null)} />}
     </div>
   );
 }

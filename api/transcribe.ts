@@ -67,8 +67,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (targetLanguage === "ar") {
         const arPrompt = finalOutput.trim()
-          ? `You are a professional Arabic translator with deep expertise in Kurdish (Sorani) to Arabic translation. Translate the following Kurdish text into flawless Modern Standard Arabic (Fusha). Return ONLY the Arabic translation — no explanations, no markdown, no HTML.\n\nKurdish text:\n${finalOutput}`
-          : `You are a professional Arabic translator. The audio is in Kurdish (Sorani). Translate directly into flawless Modern Standard Arabic (Fusha). Return ONLY the Arabic translation.`;
+          ? `You are a professional Arabic translator with deep expertise in Kurdish (Sorani) to Arabic translation.\nTranslate the following Kurdish Sorani text into flawless Modern Standard Arabic (Fusha/MSA).\nRules:\n- Preserve the original meaning, tone, and nuance precisely — do not add or omit anything.\n- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).\n- Choose the most contextually appropriate Arabic word for each Kurdish term.\n- Transliterate proper nouns correctly.\n- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.\n\nKurdish text:\n${finalOutput}`
+          : `You are a professional Arabic translator. Listen to the Kurdish (Sorani) audio and translate it directly into flawless Modern Standard Arabic (Fusha/MSA).\nRules:\n- Preserve the original meaning, tone, and nuance precisely — do not add or omit anything.\n- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).\n- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.`;
 
         const chatRes = await ai.models.generateContent({
           model: "gemini-2.5-flash",
@@ -99,17 +99,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const promptText =
       targetLanguage === "ar"
-        ? `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish audio carefully and produce a flawless, publication-quality Arabic translation.
+        ? `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish (Sorani) audio carefully and produce a flawless, publication-quality Arabic translation.
 
 Rules:
-- Translate into Modern Standard Arabic (Fusha/MSA) with rich, natural vocabulary
-- Preserve the original meaning, tone, and nuance precisely
-- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب)
-- Choose the most contextually appropriate Arabic word for each Kurdish term
-- Maintain the flow and rhythm of the original speech — do not make it sound robotic
-- If a proper noun or name appears, transliterate it correctly into Arabic
-- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML`
-        : "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
+- Translate into Modern Standard Arabic (Fusha/MSA) with rich, natural vocabulary.
+- Preserve the original meaning, tone, and nuance precisely — do not add or omit any content.
+- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).
+- Choose the most contextually appropriate Arabic word for each Kurdish term.
+- Maintain the flow and rhythm of the original speech — do not make it sound robotic.
+- Transliterate proper nouns and names correctly into Arabic script.
+- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.`
+        : `You are an expert Kurdish (Sorani) speech transcriber. Your task is to produce a perfectly faithful transcription of the spoken audio in Kurdish Sorani script.
+
+Strict rules — follow every one without exception:
+1. Transcribe EXACTLY what is spoken — do not add, remove, or change any word.
+2. Use the standard Central Kurdish (Sorani) Arabic-based script (e.g. ئ، ا، ب، پ، ت، ج، چ، ح، خ، د، ر، ڕ، ز، ژ، س، ش، ع، غ، ف، ڤ، ق، ک، گ، ل، ڵ، م، ن، وو، و، ه، ھ، ی، ێ، ئ، ە).
+3. Spell every word correctly according to standard Sorani orthography — pay close attention to:
+   - The difference between ئ and ع
+   - Long vowels (وو، ێ، ای) vs. short vowels (ە، ی، و)
+   - ڕ (rolled R) vs. ر (regular R)
+   - ڵ (lateral L) vs. ل (regular L)
+   - ڤ vs. ف and ق vs. ک where needed
+4. Preserve natural sentence boundaries and punctuation (. ، ؟ !)
+5. Do NOT translate, summarize, or paraphrase — only transcribe.
+6. Return ONLY the plain transcribed text — no markdown, no HTML, no labels, no explanations.`;
+
 
     const models = selectedModel === 'gemini-pro'
       ? ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]
