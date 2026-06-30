@@ -21,6 +21,11 @@ type HistoryItem = {
   model?: string;
 };
 
+// Matches the out-of-band chunk-progress markers the server interleaves into the
+// streamed transcript for long audio files (see lib/audioChunker.ts on the server).
+const CHUNK_PROGRESS_NUL = String.fromCharCode(0);
+const CHUNK_PROGRESS_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "CHUNK_PROGRESS:(\\d+)/(\\d+)" + CHUNK_PROGRESS_NUL, "g");
+
 export default function App() {
   const { theme, setTheme } = useTheme();
   const [user, setUser] = useState<FirebaseUser | null | undefined>(undefined); // undefined = loading
@@ -51,7 +56,11 @@ export default function App() {
   const [showSummary, setShowSummary] = useState(false);
   const [isExportingSubtitles, setIsExportingSubtitles] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
+  const [timedWords, setTimedWords] = useState<{ word: string; start: number; end: number }[]>([]);
+  const [isTimedTranscribing, setIsTimedTranscribing] = useState(false);
+  const [showTimedView, setShowTimedView] = useState(false);
   const [processStage, setProcessStage] = useState<'idle'|'compressing'|'uploading'|'transcribing'>('idle');
+  const [chunkProgress, setChunkProgress] = useState<{ current: number; total: number } | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
@@ -255,6 +264,7 @@ export default function App() {
     abortControllerRef.current = null;
     setIsTranscribing(false);
     setProcessStage('idle');
+    setChunkProgress(null);
   };
 
   const runTranscription = async (blob: Blob, langToUse: 'ku' | 'ar', compress: boolean) => {
@@ -264,6 +274,9 @@ export default function App() {
     setError(null);
     setTranscription("");
     setIsEditingTranscription(false);
+    setTimedWords([]);
+    setShowTimedView(false);
+    setChunkProgress(null);
 
     try {
       setProcessStage(compress ? 'compressing' : 'uploading');
@@ -272,6 +285,20 @@ export default function App() {
       formData.append("language", langToUse);
       formData.append("model", selectedModel);
       formData.append("compress", compress ? "true" : "false");
+
+      // Always fetch word timestamps in background for karaoke highlight
+      const timedFormData = new FormData();
+      timedFormData.append("audio", blob);
+      timedFormData.append("language", langToUse);
+      timedFormData.append("model", selectedModel);
+      setIsTimedTranscribing(true);
+      const timedPromise = fetch("/api/transcribe-timed", { method: "POST", body: timedFormData })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(words => {
+          if (Array.isArray(words) && words.length > 0) setTimedWords(words);
+        })
+        .catch(() => {})
+        .finally(() => setIsTimedTranscribing(false));
 
       setProcessStage('uploading');
       const response = await fetch("/api/transcribe", { method: "POST", body: formData, signal: ac.signal });
@@ -291,16 +318,51 @@ export default function App() {
       if (!reader) throw new Error("No reader");
       const decoder = new TextDecoder();
       let fullText = "";
+      let pending = "";
       while (true) {
         const { value, done } = await reader.read();
         if (value) {
-          const chunk = decoder.decode(value, { stream: !done });
-          if (chunk) { fullText += chunk; setTranscription(p => p + chunk); }
+          pending += decoder.decode(value, { stream: !done });
+
+          // Pull out any complete progress markers and update chunk progress,
+          // but hold back a trailing partial marker until more data arrives.
+          CHUNK_PROGRESS_MARKER_RE.lastIndex = 0;
+          let match: RegExpExecArray | null;
+          let lastIndex = 0;
+          let visible = "";
+          while ((match = CHUNK_PROGRESS_MARKER_RE.exec(pending))) {
+            visible += pending.slice(lastIndex, match.index);
+            setChunkProgress({ current: Number(match[1]), total: Number(match[2]) });
+            lastIndex = CHUNK_PROGRESS_MARKER_RE.lastIndex;
+          }
+          const rest = pending.slice(lastIndex);
+          const partialMarkerStart = rest.indexOf(CHUNK_PROGRESS_NUL);
+          if (partialMarkerStart === -1 || done) {
+            visible += rest;
+            pending = "";
+          } else {
+            visible += rest.slice(0, partialMarkerStart);
+            pending = rest.slice(partialMarkerStart);
+          }
+
+          if (visible) { fullText += visible; setTranscription(p => p + visible); }
         }
         if (done) break;
       }
       setIsTranscribing(false);
       setProcessStage('idle');
+      setChunkProgress(null);
+
+      // Wait for timestamps to arrive then auto-enable highlight view
+      if (timedPromise) {
+        timedPromise.then(() => {
+          setTimedWords(prev => {
+            if (prev.length > 0) setShowTimedView(true);
+            return prev;
+          });
+        }).catch(() => {});
+      }
+
       if (fullText.trim()) {
         await saveToHistory({ text: fullText, language: langToUse, timestamp: Date.now(), model: selectedModel });
       }
@@ -309,6 +371,7 @@ export default function App() {
       setError(err.message || "پەیوەندی لەگەڵ سێرڤەر نییە.");
       setIsTranscribing(false);
       setProcessStage('idle');
+      setChunkProgress(null);
     }
   };
 
@@ -466,6 +529,7 @@ export default function App() {
     setSummary(''); setShowSummary(false);
     setAudioDuration(0);
     setSliderMin(0); setSliderMax(100); setCurrentPct(0); setIsPlaying(false);
+    setTimedWords([]); setShowTimedView(false);
   };
 
   const fmtMMSS = (sec: number): string => {
@@ -993,7 +1057,11 @@ export default function App() {
                                 <span className="text-[10px] font-mono text-[#aaa] uppercase tracking-wider">
                                   {processStage === 'compressing' && 'فشردن و ئامادەکردن...'}
                                   {processStage === 'uploading' && 'ناردن بۆ سێرڤەر...'}
-                                  {processStage === 'transcribing' && 'گۆڕینی دەنگ بە نووسین...'}
+                                  {processStage === 'transcribing' && (
+                                    chunkProgress
+                                      ? `خەریکی وەرگێڕانی پارچەی ${chunkProgress.current} لە ${chunkProgress.total}...`
+                                      : 'گۆڕینی دەنگ بە نووسین...'
+                                  )}
                                 </span>
                               </div>
                               <button onClick={cancelTranscription}
@@ -1004,7 +1072,9 @@ export default function App() {
                             </div>
                             <div className="h-0.5 bg-[#1a1a1a] rounded-full overflow-hidden">
                               <motion.div className="h-full rounded-full bg-[#ff4e00]"
-                                animate={processStage === 'transcribing'
+                                animate={chunkProgress
+                                  ? { width: `${Math.min(100, (chunkProgress.current / chunkProgress.total) * 100)}%`, transition: { duration: 0.4 } }
+                                  : processStage === 'transcribing'
                                   ? { width: ['15%', '88%'], transition: { duration: 28, ease: 'linear' } }
                                   : processStage === 'uploading'
                                   ? { width: '15%', transition: { duration: 0.4 } }
@@ -1163,8 +1233,58 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                  {/* Karaoke toggle / loading indicator */}
+                  <div className="px-5 sm:px-7 pt-4 flex items-center gap-2" dir="ltr">
+                    {isTimedTranscribing && timedWords.length === 0 && (
+                      <span className="flex items-center gap-1.5 text-[10px] tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                        <Loader2 size={11} className="animate-spin text-[#ff4e00]" />
+                        هایلایت ئامادەدەبێت...
+                      </span>
+                    )}
+                    {timedWords.length > 0 && (
+                      <>
+                        <button
+                          onClick={() => setShowTimedView(false)}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${!showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
+                          style={showTimedView ? { color: 'var(--text-muted)' } : undefined}
+                        >تێکستی ئاسایی</button>
+                        <button
+                          onClick={() => setShowTimedView(true)}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
+                          style={showTimedView ? undefined : { color: 'var(--text-muted)' }}
+                        >🎵 هایلایتی دەنگ</button>
+                      </>
+                    )}
+                  </div>
+
                   <div className="px-5 sm:px-7 py-6 min-h-[120px]">
-                    {isEditingTranscription ? (
+                    {showTimedView && timedWords.length > 0 ? (
+                      <div className="text-xl sm:text-2xl md:text-3xl leading-[2.6] text-right" dir="rtl">
+                        {timedWords.map((w, i) => {
+                          const t = audioDuration > 0 ? (currentPct / 100) * audioDuration : -1;
+                          const active = t >= w.start && t < w.end;
+                          const past = t >= w.end;
+                          return (
+                            <span
+                              key={i}
+                              ref={active ? (el => { el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }) : undefined}
+                              onClick={() => {
+                                const el = audioElRef.current;
+                                if (el) el.currentTime = w.start;
+                              }}
+                              className="cursor-pointer inline-block transition-all duration-150 rounded mx-[1px]"
+                              style={
+                                active
+                                  ? { background: '#ff4e00', color: '#fff', padding: '0 5px', borderRadius: '5px', transform: 'scale(1.06)' }
+                                  : past
+                                  ? { color: 'var(--text-muted)', padding: '0 2px' }
+                                  : { color: 'var(--text-primary)', padding: '0 2px' }
+                              }
+                            >{w.word}</span>
+                          );
+                        })}
+                      </div>
+                    ) : isEditingTranscription ? (
                       <textarea
                         ref={editableRef}
                         value={transcription}

@@ -9,6 +9,8 @@ import os from "os";
 import crypto from "crypto";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, probeDurationSeconds } from "./lib/audioChunker";
+import { transcribeLongAudio } from "./lib/chunkedTranscription";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -148,13 +150,6 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
       return res.status(500).json({ error: "Gemini API key is not configured" });
     }
 
-    const audioPart = {
-      inlineData: {
-        mimeType: finalMimeType,
-        data: finalBuffer.toString("base64"),
-      },
-    };
-
     const promptText = targetLanguage === 'ar'
       ? `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish audio carefully and produce a flawless, publication-quality Arabic translation.
 
@@ -173,6 +168,49 @@ Rules:
       : selectedModel === 'gemini-flash2'
         ? ["gemini-2.0-flash"]
         : ["gemini-2.5-flash", "gemini-2.0-flash"];
+
+    // Long files get split into overlapping 5-minute chunks so each request stays
+    // fast and reliable; short files keep the original single-shot streaming path.
+    const tempInputPath = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".mp3");
+    fs.writeFileSync(tempInputPath, finalBuffer);
+    let durationSeconds = 0;
+    try {
+      durationSeconds = await probeDurationSeconds(tempInputPath);
+    } catch (e) {
+      console.warn("[Chunking] Duration probe failed, falling back to single-shot transcription:", e);
+    }
+
+    if (durationSeconds > CHUNK_THRESHOLD_SECONDS) {
+      try {
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Transfer-Encoding", "chunked");
+        await transcribeLongAudio({
+          ai,
+          inputPath: tempInputPath,
+          mimeType: finalMimeType,
+          models,
+          promptText,
+          onChunkStart: (index, total) => {
+            console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
+            res.write(formatChunkProgressMarker(index, total));
+          },
+          onChunkText: (text) => res.write(text),
+        });
+        res.end();
+        return;
+      } finally {
+        try { fs.unlinkSync(tempInputPath); } catch {}
+      }
+    }
+    try { fs.unlinkSync(tempInputPath); } catch {}
+
+    const audioPart = {
+      inlineData: {
+        mimeType: finalMimeType,
+        data: finalBuffer.toString("base64"),
+      },
+    };
+
     let lastError: any = null;
 
     for (const modelName of models) {

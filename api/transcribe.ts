@@ -2,11 +2,17 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { GoogleGenAI } from "@google/genai";
 import formidable from "formidable";
 import fs from "fs";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, probeDurationSeconds } from "../lib/audioChunker";
+import { transcribeLongAudio } from "../lib/chunkedTranscription";
+
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 export const config = {
   api: {
     bodyParser: false,
-    maxDuration: 60,
+    maxDuration: 300,
   },
 };
 
@@ -66,6 +72,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       if (targetLanguage === "ar") {
+        const arBaseRules = `You are a master Arabic linguist and translator specialising in Kurdish (Sorani) to Arabic.
+Produce a fully-vowelled (مُشَكَّل), grammatically impeccable Modern Standard Arabic (الفصحى) translation.
+
+Strict linguistic rules:
+
+GRAMMAR & SYNTAX (نحو):
+- Apply full iʿrāb (إعراب): ضمة رفع، فتحة نصب، كسرة جر، سكون جزم
+- Mark tanwīn on indefinite words: ـً ـٍ ـٌ
+- Use correct definite article (ال) with sun-letter assimilation
+- Subject–verb agreement in gender and number (مفرد/مثنى/جمع)
+- Correct verb conjugations: tense, voice (معلوم/مجهول), mood
+
+MORPHOLOGY (صرف):
+- Derive words from correct Arabic roots (جذر ثلاثي/رباعي)
+- Use correct morphological patterns (أوزان صرفية)
+- Correct broken plurals: فُعُول، أَفْعَال، فِعَال، فُعَلَاء
+- Proper hamza (همزة وصل vs همزة قطع)
+
+DIACRITICS (تشكيل):
+- Full short vowels on every word: فَتْحَة، كَسْرَة، ضَمَّة، سُكُون
+- Shadda (شدَّة) on all geminate consonants
+- Tanwīn on all indefinite nouns and adjectives
+
+Return ONLY the final fully-vowelled Arabic text — no explanations, no markdown, no HTML.`;
+
         const arPrompt = finalOutput.trim()
           ? `You are a professional Arabic translator with deep expertise in Kurdish (Sorani) to Arabic translation.\nTranslate the following Kurdish Sorani text into flawless Modern Standard Arabic (Fusha/MSA).\nRules:\n- Preserve the original meaning, tone, and nuance precisely — do not add or omit anything.\n- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).\n- Choose the most contextually appropriate Arabic word for each Kurdish term.\n- Transliterate proper nouns correctly.\n- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.\n\nKurdish text:\n${finalOutput}`
           : `You are a professional Arabic translator. Listen to the Kurdish (Sorani) audio and translate it directly into flawless Modern Standard Arabic (Fusha/MSA).\nRules:\n- Preserve the original meaning, tone, and nuance precisely — do not add or omit anything.\n- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).\n- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.`;
@@ -89,13 +120,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({ error: "GEMINI_API_KEY داخل نەکراوە. تکایە لە Vercel Dashboard → Settings → Environment Variables کلیلەکە زیاد بکە." });
     }
-
-    const audioPart = {
-      inlineData: {
-        mimeType,
-        data: fileBuffer.toString("base64"),
-      },
-    };
 
     const promptText =
       targetLanguage === "ar"
@@ -130,6 +154,45 @@ Strict rules — follow every one without exception:
       : selectedModel === 'gemini-flash2'
         ? ["gemini-2.0-flash"]
         : ["gemini-2.5-flash", "gemini-2.0-flash"];
+
+    // Long files get split into overlapping 5-minute chunks so each Gemini
+    // request stays fast and reliable; short files keep single-shot streaming.
+    let durationSeconds = 0;
+    try {
+      durationSeconds = await probeDurationSeconds(audioFile.filepath);
+    } catch (e) {
+      console.warn("[Chunking] Duration probe failed, falling back to single-shot transcription:", e);
+    }
+
+    if (durationSeconds > CHUNK_THRESHOLD_SECONDS) {
+      try {
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Transfer-Encoding", "chunked");
+        await transcribeLongAudio({
+          ai,
+          inputPath: audioFile.filepath,
+          mimeType,
+          models,
+          promptText,
+          onChunkStart: (index, total) => {
+            console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
+            res.write(formatChunkProgressMarker(index, total));
+          },
+          onChunkText: (text) => res.write(text),
+        });
+        return res.end();
+      } finally {
+        try { fs.unlinkSync(audioFile.filepath); } catch {}
+      }
+    }
+
+    const audioPart = {
+      inlineData: {
+        mimeType,
+        data: fileBuffer.toString("base64"),
+      },
+    };
+
     let lastError: any = null;
 
     for (const modelName of models) {
