@@ -9,30 +9,40 @@ import os from "os";
 import crypto from "crypto";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, probeDurationSeconds } from "./lib/audioChunker";
+import { transcribeLongAudio } from "./lib/chunkedTranscription";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
-dotenv.config({ path: path.resolve(path.dirname(process.argv[1] || ''), '.env') });
 
 const app = express();
 const PORT = 3000;
 
-// Setup Multer for memory storage
+// Allowed values — whitelist to prevent injection
+const ALLOWED_LANGUAGES = new Set(['ku', 'ar']);
+const ALLOWED_MODELS = new Set(['gemini', 'gemini-pro', 'gemini-flash2', 'scribe']);
+const ALLOWED_FORMATS = new Set(['srt', 'vtt']);
+const ALLOWED_MIMES = new Set([
+  'audio/mpeg','audio/mp3','audio/wav','audio/ogg','audio/webm','audio/mp4',
+  'audio/aac','audio/flac','audio/x-m4a','audio/m4a',
+  'video/webm','video/mp4','application/ogg',
+]);
+
 const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-// Initialize Gemini
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || "",
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
-  }
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+
+app.use(express.json({ limit: '1mb' }));
+
+// Security headers
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
 });
-
-app.use(express.json());
 
 // API route for audio transcription
 app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
@@ -41,10 +51,13 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
       return res.status(400).json({ error: "No audio file provided" });
     }
 
-    const targetLanguage = req.body.language || 'ku';
-    const selectedModel = req.body.model || 'gemini'; // 'gemini' | 'gemini-flash2' | 'scribe'
-    
+    const targetLanguage = ALLOWED_LANGUAGES.has(req.body.language) ? req.body.language : 'ku';
+    const selectedModel = ALLOWED_MODELS.has(req.body.model) ? req.body.model : 'gemini';
+
     let mimeType = req.file.mimetype.split(';')[0];
+    if (!ALLOWED_MIMES.has(mimeType)) {
+      return res.status(400).json({ error: "جۆری فایلەکە پشتگیری نەکراوە." });
+    }
     if (mimeType === 'application/ogg') mimeType = 'audio/ogg';
     if (mimeType === 'video/webm') mimeType = 'audio/webm';
     if (mimeType === 'video/mp4') mimeType = 'audio/mp4';
@@ -137,13 +150,6 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
       return res.status(500).json({ error: "Gemini API key is not configured" });
     }
 
-    const audioPart = {
-      inlineData: {
-        mimeType: finalMimeType,
-        data: finalBuffer.toString("base64"),
-      },
-    };
-
     const promptText = targetLanguage === 'ar'
       ? `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish audio carefully and produce a flawless, publication-quality Arabic translation.
 
@@ -162,6 +168,49 @@ Rules:
       : selectedModel === 'gemini-flash2'
         ? ["gemini-2.0-flash"]
         : ["gemini-2.5-flash", "gemini-2.0-flash"];
+
+    // Long files get split into overlapping 5-minute chunks so each request stays
+    // fast and reliable; short files keep the original single-shot streaming path.
+    const tempInputPath = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".mp3");
+    fs.writeFileSync(tempInputPath, finalBuffer);
+    let durationSeconds = 0;
+    try {
+      durationSeconds = await probeDurationSeconds(tempInputPath);
+    } catch (e) {
+      console.warn("[Chunking] Duration probe failed, falling back to single-shot transcription:", e);
+    }
+
+    if (durationSeconds > CHUNK_THRESHOLD_SECONDS) {
+      try {
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Transfer-Encoding", "chunked");
+        await transcribeLongAudio({
+          ai,
+          inputPath: tempInputPath,
+          mimeType: finalMimeType,
+          models,
+          promptText,
+          onChunkStart: (index, total) => {
+            console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
+            res.write(formatChunkProgressMarker(index, total));
+          },
+          onChunkText: (text) => res.write(text),
+        });
+        res.end();
+        return;
+      } finally {
+        try { fs.unlinkSync(tempInputPath); } catch {}
+      }
+    }
+    try { fs.unlinkSync(tempInputPath); } catch {}
+
+    const audioPart = {
+      inlineData: {
+        mimeType: finalMimeType,
+        data: finalBuffer.toString("base64"),
+      },
+    };
+
     let lastError: any = null;
 
     for (const modelName of models) {
@@ -224,10 +273,11 @@ app.post("/api/subtitles", upload.single("audio"), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: "No audio file provided" });
     if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "Gemini API key not configured" });
 
-    const targetLanguage = req.body.language || 'ku';
-    const format: 'srt' | 'vtt' = req.body.format === 'vtt' ? 'vtt' : 'srt';
+    const targetLanguage = ALLOWED_LANGUAGES.has(req.body.language) ? req.body.language : 'ku';
+    const format: 'srt' | 'vtt' = ALLOWED_FORMATS.has(req.body.format) ? req.body.format : 'srt';
 
     let mimeType = req.file.mimetype.split(';')[0];
+    if (!ALLOWED_MIMES.has(mimeType)) return res.status(400).json({ error: "جۆری فایلەکە پشتگیری نەکراوە." });
     if (mimeType === 'application/ogg') mimeType = 'audio/ogg';
     if (mimeType === 'video/webm') mimeType = 'audio/webm';
     if (mimeType === 'video/mp4') mimeType = 'audio/mp4';
@@ -284,7 +334,8 @@ app.post("/api/subtitles", upload.single("audio"), async (req, res) => {
 app.post("/api/summarize", async (req, res) => {
   try {
     const { text, language } = req.body;
-    if (!text?.trim()) return res.status(400).json({ error: "No text provided" });
+    if (!text?.trim()) return res.status(400).json({ error: "تێکستێک نەناردراوە." });
+    if (typeof text !== 'string' || text.length > 50000) return res.status(400).json({ error: "تێکستەکە زۆر درێژە." });
     if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "GEMINI_API_KEY نەخوێندراوەتەوە — تکایە لە Vercel Dashboard زیادی بکە." });
 
     const isKurdish = language === 'ku';
