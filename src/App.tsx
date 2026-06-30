@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles, Sun, Moon, Monitor } from "lucide-react";
+import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles, Sun, Moon, Monitor, SpellCheck } from "lucide-react";
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from "firebase/auth";
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
@@ -25,6 +25,100 @@ type HistoryItem = {
 // streamed transcript for long audio files (see lib/audioChunker.ts on the server).
 const CHUNK_PROGRESS_NUL = String.fromCharCode(0);
 const CHUNK_PROGRESS_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "CHUNK_PROGRESS:(\\d+)/(\\d+)" + CHUNK_PROGRESS_NUL, "g");
+// Marks the moment the server starts verifying a detected Quran ayah or Hadith
+// (AlQuran Cloud lookup / Google Search Grounding), which adds noticeable latency.
+const VERIFYING_SOURCES_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "VERIFYING_SOURCES" + CHUNK_PROGRESS_NUL, "g");
+
+// Matches <quran surah="..." ayah="..." verified="true|false">text</quran> and
+// <hadith narrator="..." verified="true|false">text</hadith> tags the server may embed
+// in a Kurdish transcript when it recognizes recited Quran/Hadith (see lib/islamicTextVerifier.ts).
+const QURAN_TAG_RE = /<quran surah="([^"]*)" ayah="([^"]*)"(?: verified="(true|false)")?>([\s\S]*?)<\/quran>/g;
+const HADITH_TAG_RE = /<hadith narrator="([^"]*)"(?: verified="(true|false)")?>([\s\S]*?)<\/hadith>/g;
+
+interface CitationSegment {
+  kind: 'quran' | 'hadith';
+  text: string;
+  surah?: string;
+  ayah?: string;
+  verified?: boolean;
+  narrator?: string;
+}
+
+/** Formats a citation segment as ﴿ayah text﴾ [سورة Name - آية N] / [رواه Narrator], matching the
+ * Quranic-bracket convention used in printed Islamic texts. */
+function formatCitationBracket(seg: CitationSegment): string {
+  const quote = `﴿${seg.text}﴾`;
+  const source = seg.kind === 'quran' ? `[سورة ${seg.surah} - آية ${seg.ayah}]` : `[رواه ${seg.narrator}]`;
+  return `${quote} ${source}`;
+}
+
+/** Strips citation tags down to ﴿text﴾ [source] bracket notation, for copy/export/history. */
+function stripCitationTags(text: string): string {
+  return text
+    .replace(QURAN_TAG_RE, (_m, surah, ayah, verified, inner) => formatCitationBracket({ kind: 'quran', surah, ayah, verified: verified === 'true', text: inner }))
+    .replace(HADITH_TAG_RE, (_m, narrator, verified, inner) => formatCitationBracket({ kind: 'hadith', narrator, verified: verified === 'true', text: inner }));
+}
+
+/** Splits transcription text into plain-text and citation segments for rendering. */
+function parseCitationSegments(text: string): (string | CitationSegment)[] {
+  const combined = new RegExp(`${QURAN_TAG_RE.source}|${HADITH_TAG_RE.source}`, 'g');
+  const segments: (string | CitationSegment)[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = combined.exec(text))) {
+    if (match.index > lastIndex) segments.push(text.slice(lastIndex, match.index));
+    if (match[1] !== undefined) {
+      segments.push({ kind: 'quran', surah: match[1], ayah: match[2], verified: match[3] === 'true', text: match[4] });
+    } else {
+      segments.push({ kind: 'hadith', narrator: match[5], verified: match[6] === 'true', text: match[7] });
+    }
+    lastIndex = combined.lastIndex;
+  }
+  if (lastIndex < text.length) segments.push(text.slice(lastIndex));
+  return segments;
+}
+
+/** Splits correctedText into plain/highlighted segments by locating each error's
+ * `corrected` substring in order. Falls back to treating an unlocatable substring as
+ * plain text rather than throwing — Gemini's error entries are free-form and won't
+ * always be an exact substring match. */
+function buildGrammarDiffSegments(correctedText: string, errors: { corrected: string }[]): { text: string; changed: boolean }[] {
+  const segments: { text: string; changed: boolean }[] = [];
+  let cursor = 0;
+  for (const err of errors) {
+    if (!err.corrected) continue;
+    const idx = correctedText.indexOf(err.corrected, cursor);
+    if (idx === -1) continue;
+    if (idx > cursor) segments.push({ text: correctedText.slice(cursor, idx), changed: false });
+    segments.push({ text: err.corrected, changed: true });
+    cursor = idx + err.corrected.length;
+  }
+  if (cursor < correctedText.length) segments.push({ text: correctedText.slice(cursor), changed: false });
+  return segments;
+}
+
+/** Renders a transcription string, showing Quran/Hadith citations in ﴿ ﴾ [source] bracket notation
+ * with a verified badge, distinct from the surrounding plain Kurdish text. */
+function TranscriptionWithCitations({ text }: { text: string }) {
+  const segments = parseCitationSegments(text);
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (typeof seg === 'string') return <span key={i}>{seg}</span>;
+        const isQuran = seg.kind === 'quran';
+        return (
+          <span key={i} className="inline align-baseline mx-1 px-1.5 py-0.5 rounded" dir="rtl"
+            style={{ background: isQuran ? 'rgba(34,197,94,0.08)' : 'rgba(168,85,247,0.08)' }}
+          >
+            <span className="font-semibold text-[1.15em] leading-loose" style={{ fontFamily: "'Amiri Quran', 'Traditional Arabic', 'Scheherazade New', serif" }}>{formatCitationBracket(seg)}</span>
+            {seg.verified && <span className="text-green-500 text-sm align-super"> ✓</span>}
+            {!seg.verified && <span className="text-amber-500 text-xs"> (دڵنیا نییت)</span>}
+          </span>
+        );
+      })}
+    </>
+  );
+}
 
 export default function App() {
   const { theme, setTheme } = useTheme();
@@ -41,7 +135,7 @@ export default function App() {
   const [targetLanguage, setTargetLanguage] = useState<'ku' | 'ar'>('ku');
   const [selectedModel, setSelectedModel] = useState<'gemini-pro' | 'gemini' | 'gemini-flash2' | 'scribe'>('gemini-pro');
   const [shouldCompress, setShouldCompress] = useState(true);
-  const [activeTab, setActiveTab] = useState<'transcribe' | 'library' | 'profile'>('transcribe');
+  const [activeTab, setActiveTab] = useState<'transcribe' | 'library' | 'hadith-search' | 'arabic-grammar' | 'profile'>('transcribe');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | 'all' | null>(null);
@@ -61,6 +155,15 @@ export default function App() {
   const [showTimedView, setShowTimedView] = useState(false);
   const [processStage, setProcessStage] = useState<'idle'|'compressing'|'uploading'|'transcribing'>('idle');
   const [chunkProgress, setChunkProgress] = useState<{ current: number; total: number } | null>(null);
+  const [isVerifyingSources, setIsVerifyingSources] = useState(false);
+  const [hadithQuery, setHadithQuery] = useState('');
+  const [hadithResults, setHadithResults] = useState<{ arabicText: string; narrator: string; book: string; chapter?: string; grading?: string; verified: boolean }[]>([]);
+  const [isSearchingHadith, setIsSearchingHadith] = useState(false);
+  const [hadithSearchError, setHadithSearchError] = useState<string | null>(null);
+  const [grammarInput, setGrammarInput] = useState('');
+  const [grammarResult, setGrammarResult] = useState<{ correctedText: string; errors: { original: string; corrected: string; type: string; explanation: string }[] } | null>(null);
+  const [isCorrectingGrammar, setIsCorrectingGrammar] = useState(false);
+  const [grammarError, setGrammarError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
@@ -183,9 +286,10 @@ export default function App() {
 
   const saveToHistory = async (item: Omit<HistoryItem, 'id'>) => {
     if (!user) return;
+    const cleanItem = { ...item, text: stripCitationTags(item.text) };
     try {
-      const ref = await addDoc(collection(db, "users", user.uid, "history"), item);
-      setHistory(prev => [{ id: ref.id, ...item }, ...prev].slice(0, 100));
+      const ref = await addDoc(collection(db, "users", user.uid, "history"), cleanItem);
+      setHistory(prev => [{ id: ref.id, ...cleanItem }, ...prev].slice(0, 100));
     } catch (err: any) {
       console.error("saveToHistory ERROR:", err.code, err.message);
       if (err?.code === 'permission-denied') {
@@ -265,6 +369,7 @@ export default function App() {
     setIsTranscribing(false);
     setProcessStage('idle');
     setChunkProgress(null);
+    setIsVerifyingSources(false);
   };
 
   const runTranscription = async (blob: Blob, langToUse: 'ku' | 'ar', compress: boolean) => {
@@ -277,6 +382,7 @@ export default function App() {
     setTimedWords([]);
     setShowTimedView(false);
     setChunkProgress(null);
+    setIsVerifyingSources(false);
 
     try {
       setProcessStage(compress ? 'compressing' : 'uploading');
@@ -324,16 +430,20 @@ export default function App() {
         if (value) {
           pending += decoder.decode(value, { stream: !done });
 
-          // Pull out any complete progress markers and update chunk progress,
+          // Pull out any complete progress markers (in order) and update state,
           // but hold back a trailing partial marker until more data arrives.
-          CHUNK_PROGRESS_MARKER_RE.lastIndex = 0;
+          const combinedMarkerRe = new RegExp(`${CHUNK_PROGRESS_MARKER_RE.source}|${VERIFYING_SOURCES_MARKER_RE.source}`, "g");
           let match: RegExpExecArray | null;
           let lastIndex = 0;
           let visible = "";
-          while ((match = CHUNK_PROGRESS_MARKER_RE.exec(pending))) {
+          while ((match = combinedMarkerRe.exec(pending))) {
             visible += pending.slice(lastIndex, match.index);
-            setChunkProgress({ current: Number(match[1]), total: Number(match[2]) });
-            lastIndex = CHUNK_PROGRESS_MARKER_RE.lastIndex;
+            if (match[1] !== undefined) {
+              setChunkProgress({ current: Number(match[1]), total: Number(match[2]) });
+            } else {
+              setIsVerifyingSources(true);
+            }
+            lastIndex = combinedMarkerRe.lastIndex;
           }
           const rest = pending.slice(lastIndex);
           const partialMarkerStart = rest.indexOf(CHUNK_PROGRESS_NUL);
@@ -352,6 +462,7 @@ export default function App() {
       setIsTranscribing(false);
       setProcessStage('idle');
       setChunkProgress(null);
+      setIsVerifyingSources(false);
 
       // Wait for timestamps to arrive then auto-enable highlight view
       if (timedPromise) {
@@ -372,6 +483,7 @@ export default function App() {
       setIsTranscribing(false);
       setProcessStage('idle');
       setChunkProgress(null);
+      setIsVerifyingSources(false);
     }
   };
 
@@ -388,7 +500,7 @@ export default function App() {
   const copyText = (text: string, id: string | null = null) => {
     // Normalize whitespace: collapse multiple spaces/newlines into single space per word,
     // then wrap at ~80 chars per line for clean paste output
-    const normalized = text
+    const normalized = stripCitationTags(text)
       .replace(/\r\n/g, '\n')
       .replace(/[ \t]+/g, ' ')
       .trim();
@@ -443,8 +555,57 @@ export default function App() {
     }
   };
 
-  const exportText = (format: 'txt' | 'docx' | 'pdf', text: string) => {
+  const searchHadith = async () => {
+    if (!hadithQuery.trim()) return;
+    setIsSearchingHadith(true);
+    setHadithSearchError(null);
+    setHadithResults([]);
+    try {
+      const res = await fetch('/api/hadith-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: hadithQuery }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setHadithSearchError(data.error || 'هەڵەیەک ڕوویدا.');
+        return;
+      }
+      setHadithResults(Array.isArray(data.results) ? data.results : []);
+    } catch {
+      setHadithSearchError('پەیوەندی لەگەڵ سێرڤەر نییە.');
+    } finally {
+      setIsSearchingHadith(false);
+    }
+  };
+
+  const correctGrammar = async () => {
+    if (!grammarInput.trim()) return;
+    setIsCorrectingGrammar(true);
+    setGrammarError(null);
+    setGrammarResult(null);
+    try {
+      const res = await fetch('/api/grammar-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: grammarInput }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setGrammarError(data.error || 'هەڵەیەک ڕوویدا.');
+        return;
+      }
+      setGrammarResult(data);
+    } catch {
+      setGrammarError('پەیوەندی لەگەڵ سێرڤەر نییە.');
+    } finally {
+      setIsCorrectingGrammar(false);
+    }
+  };
+
+  const exportText = (format: 'txt' | 'docx' | 'pdf', rawText: string) => {
     const filename = `voxscript-${Date.now()}`;
+    const text = stripCitationTags(rawText);
     const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
     const htmlDoc = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Kurdish Transcription</title><style>body{font-family:"Arial","Tahoma",sans-serif;font-size:16pt;line-height:2;direction:rtl;text-align:right;padding:2cm;color:#000;}</style></head><body>${escaped}</body></html>`;
 
@@ -506,7 +667,7 @@ export default function App() {
 
   const shareText = (platform: 'telegram' | 'whatsapp' | 'native', text: string) => {
     // Telegram & WhatsApp have message length limits — trim gracefully
-    const trimmed = text.slice(0, 3900);
+    const trimmed = stripCitationTags(text).slice(0, 3900);
     const encoded = encodeURIComponent(trimmed);
     if (platform === 'telegram') {
       // Use tg:// deep-link: no url param needed, just msg
@@ -627,12 +788,12 @@ export default function App() {
 
           {/* Desktop Nav */}
           <nav className="hidden sm:flex gap-1" dir="ltr">
-            {(['transcribe', 'library', 'profile'] as const).map(tab => (
+            {(['transcribe', 'library', 'hadith-search', 'arabic-grammar', 'profile'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`relative px-4 py-2 text-sm font-medium transition-all rounded-lg ${activeTab === tab ? 'text-[#ff4e00]' : 'hover:bg-[#ff4e00]/05'}`}
                 style={activeTab !== tab ? { color: 'var(--text-muted)' } : undefined}
               >
-                {tab === 'transcribe' ? 'نووسینەوە' : tab === 'library' ? 'کتێبخانە' : 'پرۆفایل'}
+                {tab === 'transcribe' ? 'نووسینەوە' : tab === 'library' ? 'کتێبخانە' : tab === 'hadith-search' ? 'گەڕانی فەرموودە' : tab === 'arabic-grammar' ? 'ڕاستکردنەوەی عەرەبی' : 'پرۆفایل'}
                 {tab === 'library' && history.length > 0 && (
                   <span className="mr-1.5 text-[9px] px-1.5 py-0.5 rounded-full bg-[#ff4e00] text-white">{history.length}</span>
                 )}
@@ -680,7 +841,7 @@ export default function App() {
                     <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
                       <p className="text-[10px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>بەشەکان</p>
                       <div className="flex gap-1">
-                        {([['transcribe', Mic, 'نووسینەوە'], ['library', History, 'کتێبخانە'], ['profile', User, 'پرۆفایل']] as const).map(([tab, Icon, label]) => (
+                        {([['transcribe', Mic, 'نووسینەوە'], ['library', History, 'کتێبخانە'], ['hadith-search', Search, 'گەڕانی فەرموودە'], ['arabic-grammar', SpellCheck, 'ڕاستکردنەوەی عەرەبی'], ['profile', User, 'پرۆفایل']] as const).map(([tab, Icon, label]) => (
                           <button key={tab} onClick={() => { setActiveTab(tab as any); setShowUserMenu(false); }}
                             className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:bg-[#ff4e00]/10'}`}
                             style={activeTab !== tab ? { color: 'var(--text-muted)', border: '1px solid var(--border)' } : {}}
@@ -809,6 +970,8 @@ export default function App() {
         {([
           ['transcribe', Mic, 'نووسینەوە'],
           ['library', History, 'کتێبخانە'],
+          ['hadith-search', Search, 'گەڕان'],
+          ['arabic-grammar', SpellCheck, 'ڕاستکردنەوە'],
           ['profile', User, 'پرۆفایل'],
         ] as const).map(([tab, Icon, label]) => (
           <button key={tab} onClick={() => setActiveTab(tab as any)}
@@ -1053,12 +1216,16 @@ export default function App() {
                           >
                             <div className="flex items-center justify-between" dir="ltr">
                               <div className="flex items-center gap-2">
-                                <Loader2 size={13} className="animate-spin text-[#ff4e00]" />
+                                {isVerifyingSources
+                                  ? <Search size={13} className="animate-pulse text-green-500" />
+                                  : <Loader2 size={13} className="animate-spin text-[#ff4e00]" />}
                                 <span className="text-[10px] font-mono text-[#aaa] uppercase tracking-wider">
                                   {processStage === 'compressing' && 'فشردن و ئامادەکردن...'}
                                   {processStage === 'uploading' && 'ناردن بۆ سێرڤەر...'}
                                   {processStage === 'transcribing' && (
-                                    chunkProgress
+                                    isVerifyingSources
+                                      ? 'دەرهێنانی سەرچاوەکانی ئایەت و فەرموودە...'
+                                      : chunkProgress
                                       ? `خەریکی وەرگێڕانی پارچەی ${chunkProgress.current} لە ${chunkProgress.total}...`
                                       : 'گۆڕینی دەنگ بە نووسین...'
                                   )}
@@ -1071,8 +1238,10 @@ export default function App() {
                               </button>
                             </div>
                             <div className="h-0.5 bg-[#1a1a1a] rounded-full overflow-hidden">
-                              <motion.div className="h-full rounded-full bg-[#ff4e00]"
-                                animate={chunkProgress
+                              <motion.div className={`h-full rounded-full ${isVerifyingSources ? 'bg-green-500' : 'bg-[#ff4e00]'}`}
+                                animate={isVerifyingSources
+                                  ? { width: ['10%', '60%', '10%'], transition: { duration: 1.6, repeat: Infinity, ease: 'easeInOut' } }
+                                  : chunkProgress
                                   ? { width: `${Math.min(100, (chunkProgress.current / chunkProgress.total) * 100)}%`, transition: { duration: 0.4 } }
                                   : processStage === 'transcribing'
                                   ? { width: ['15%', '88%'], transition: { duration: 28, ease: 'linear' } }
@@ -1298,7 +1467,7 @@ export default function App() {
                       <p className="text-xl sm:text-2xl md:text-3xl leading-relaxed whitespace-pre-wrap cursor-text" style={{ color: 'var(--text-primary)' }}
                         onClick={() => { setIsEditingTranscription(true); setTimeout(() => editableRef.current?.focus(), 50); }}
                         title="کلیک بکە بۆ دەستکاریکردن"
-                      >{transcription}</p>
+                      ><TranscriptionWithCitations text={transcription} /></p>
                     )}
                   </div>
                   {/* Summary panel */}
@@ -1473,6 +1642,205 @@ export default function App() {
                 <p className="text-[#444] text-sm">هیچ تۆمارێک بوونی نییە</p>
               </div>
             )}
+          </motion.section>
+        ) : activeTab === 'hadith-search' ? (
+          /* ── HADITH SEARCH ── */
+          <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="rounded-2xl shadow-2xl overflow-hidden"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+          >
+            <div className="flex items-center gap-2 px-5 sm:px-7 py-4" style={{ borderBottom: '1px solid var(--border-soft)' }}>
+              <Search size={15} style={{ color: 'var(--text-dim)' }} />
+              <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>گەڕانی واتایی بۆ فەرموودەکان</span>
+            </div>
+
+            <div className="px-5 sm:px-7 py-5 space-y-3">
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                واتا یان وەسفی فەرموودەکە بە کوردی بنووسە، سیستەمەکە دەقی عەرەبی ڕەسەنی فەرموودەکە لەگەڵ ناوی ڕاوی و سەرچاوەکەی بۆ دەدۆزێتەوە.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <textarea
+                  value={hadithQuery}
+                  onChange={e => setHadithQuery(e.target.value)}
+                  placeholder="بۆ نموونە: ئەو فەرموودەیە کە باسی نیەت دەکات..."
+                  dir="rtl"
+                  rows={2}
+                  className="flex-1 rounded-xl px-4 py-3 text-sm outline-none transition-colors resize-none"
+                  style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); searchHadith(); } }}
+                />
+                <button onClick={searchHadith} disabled={isSearchingHadith || !hadithQuery.trim()}
+                  className="px-5 py-3 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.08em] shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shrink-0"
+                >
+                  {isSearchingHadith ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                  گەڕان
+                </button>
+              </div>
+
+              {hadithSearchError && (
+                <p className="text-xs text-red-500">{hadithSearchError}</p>
+              )}
+
+              {hadithResults.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  {hadithResults.map((result, i) => {
+                    const copyId = `hadith-${i}`;
+                    const fullCitation = `﴿${result.arabicText}﴾ [رواه ${result.narrator}، ${result.book}${result.chapter ? `، ${result.chapter}` : ''}]`;
+                    return (
+                      <div key={i} className="rounded-xl overflow-hidden" dir="rtl"
+                        style={{ background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.2)' }}
+                      >
+                        {/* Status bar */}
+                        <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid rgba(168,85,247,0.15)' }}>
+                          {result.verified
+                            ? <span className="text-[10px] uppercase tracking-wider font-bold text-green-500">✓ پشتڕاستکراوە</span>
+                            : <span className="text-[10px] uppercase tracking-wider font-bold text-amber-500">دڵنیا نییت — پشتڕاستی نەکراوەتەوە</span>}
+                          <button onClick={() => copyText(fullCitation, copyId)}
+                            title="کۆپیکردنی فەرموودەکە"
+                            className="shrink-0 p-1.5 rounded-lg bg-card border border-[#ffffff10] hover:bg-[#222] transition-colors"
+                          >
+                            {copiedId === copyId ? <Check size={13} className="text-green-400" /> : <Copy size={13} style={{ color: 'var(--text-muted)' }} />}
+                          </button>
+                        </div>
+
+                        {/* 1. Arabic text */}
+                        <div className="px-4 py-3" style={{ borderBottom: '1px solid rgba(168,85,247,0.15)' }}>
+                          <p className="text-[9px] uppercase tracking-widest font-bold mb-1.5" style={{ color: 'var(--text-faint)' }}>دەقی فەرموودەکە</p>
+                          <p className="font-semibold text-lg leading-loose" style={{ fontFamily: "'Amiri Quran', 'Traditional Arabic', 'Scheherazade New', serif" }}>
+                            ﴿{result.arabicText}﴾
+                          </p>
+                        </div>
+
+                        {/* 2. Narrator */}
+                        <div className="px-4 py-3" style={{ borderBottom: '1px solid rgba(168,85,247,0.15)' }}>
+                          <p className="text-[9px] uppercase tracking-widest font-bold mb-1.5" style={{ color: 'var(--text-faint)' }}>ڕاوی (گێڕەڕەوە)</p>
+                          <p className="text-sm" style={{ color: 'var(--text-primary)' }}>{result.narrator}</p>
+                        </div>
+
+                        {/* 3. Source */}
+                        <div className="px-4 py-3">
+                          <p className="text-[9px] uppercase tracking-widest font-bold mb-1.5" style={{ color: 'var(--text-faint)' }}>سەرچاوە</p>
+                          <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                            {result.book}
+                            {result.chapter && ` — ${result.chapter}`}
+                            {result.grading && ` (${result.grading})`}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!isSearchingHadith && !hadithSearchError && hadithResults.length === 0 && hadithQuery.trim() === '' && (
+                <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
+                  <Search size={32} className="text-[#ffffff08] mb-3" />
+                  <p className="text-[#444] text-sm">وەسفی فەرموودەکە بنووسە بۆ دەستپێکردنی گەڕان</p>
+                </div>
+              )}
+            </div>
+          </motion.section>
+        ) : activeTab === 'arabic-grammar' ? (
+          /* ── ARABIC GRAMMAR CORRECTOR ── */
+          <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="rounded-2xl shadow-2xl overflow-hidden"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+          >
+            <div className="flex items-center gap-2 px-5 sm:px-7 py-4" style={{ borderBottom: '1px solid var(--border-soft)' }}>
+              <SpellCheck size={15} style={{ color: 'var(--text-dim)' }} />
+              <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>ڕاستکردنەوەی ڕێزمانی عەرەبی</span>
+            </div>
+
+            <div className="px-5 sm:px-7 py-5 space-y-3">
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                دەقی عەرەبی بنووسە، سیستەمەکە هەڵەکانی ڕێنووس، نحو، و صرف ڕاستدەکاتەوە بەبێ ئەوەی هیچ وشەیەک زیاد یان کەم بکات یان مانا بگۆڕێت.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[9px] uppercase tracking-widest font-bold mb-1.5" style={{ color: 'var(--text-faint)' }}>دەقی سەرەتایی</p>
+                  <textarea
+                    value={grammarInput}
+                    onChange={e => setGrammarInput(e.target.value)}
+                    placeholder="دەقی عەرەبی لێرە بنووسە..."
+                    dir="rtl"
+                    rows={8}
+                    className="w-full rounded-xl px-4 py-3 text-base leading-relaxed outline-none transition-colors resize-none"
+                    style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)', fontFamily: "'Amiri Quran', 'Traditional Arabic', serif" }}
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-[9px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-faint)' }}>دەقی ڕاستکراوە</p>
+                    {grammarResult && (
+                      <button onClick={() => copyText(grammarResult.correctedText, 'grammar-corrected')}
+                        title="کۆپیکردنی دەقی ڕاستکراوە"
+                        className="shrink-0 p-1 rounded-md bg-card border border-[#ffffff10] hover:bg-[#222] transition-colors"
+                      >
+                        {copiedId === 'grammar-corrected' ? <Check size={12} className="text-green-400" /> : <Copy size={12} style={{ color: 'var(--text-muted)' }} />}
+                      </button>
+                    )}
+                  </div>
+                  <div dir="rtl"
+                    className="w-full rounded-xl px-4 py-3 text-base leading-relaxed overflow-auto select-text"
+                    style={{ minHeight: 'calc(8 * 1.625em + 1.5rem)', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: 'var(--text-primary)', fontFamily: "'Amiri Quran', 'Traditional Arabic', serif" }}
+                  >
+                    {grammarResult ? (
+                      buildGrammarDiffSegments(grammarResult.correctedText, grammarResult.errors).map((seg, i) =>
+                        seg.changed
+                          ? <span key={i} className="text-green-500 font-semibold bg-green-500/10 rounded px-0.5">{seg.text}</span>
+                          : <span key={i}>{seg.text}</span>
+                      )
+                    ) : (
+                      <span style={{ color: 'var(--text-faint)' }}>دەقی ڕاستکراوە لێرە دەردەکەوێت...</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <button onClick={correctGrammar} disabled={isCorrectingGrammar || !grammarInput.trim()}
+                className="w-full py-3 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.08em] shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isCorrectingGrammar ? <Loader2 size={14} className="animate-spin" /> : <SpellCheck size={14} />}
+                ڕاستکردنەوە
+              </button>
+
+              {grammarError && (
+                <p className="text-xs text-red-500">{grammarError}</p>
+              )}
+
+              {grammarResult && (
+                <div className="space-y-3 pt-2">
+                  {/* Error report */}
+                  {grammarResult.errors.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-[9px] uppercase tracking-widest font-bold px-1" style={{ color: 'var(--text-faint)' }}>
+                        ڕاپۆرتی هەڵەکان ({grammarResult.errors.length})
+                      </p>
+                      {grammarResult.errors.map((err, i) => (
+                        <div key={i} className="rounded-xl px-4 py-3" dir="rtl" style={{ background: 'rgba(255,78,0,0.05)', border: '1px solid rgba(255,78,0,0.18)' }}>
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="text-[9px] px-2 py-0.5 rounded-full bg-[#ff4e00]/15 text-[#ff4e00] font-bold uppercase tracking-wider">{err.type}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-base mb-1.5" style={{ fontFamily: "'Amiri Quran', 'Traditional Arabic', serif" }}>
+                            <span className="text-red-400 line-through">{err.original}</span>
+                            <span style={{ color: 'var(--text-faint)' }}>←</span>
+                            <span className="text-green-500 font-semibold">{err.corrected}</span>
+                          </div>
+                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>{err.explanation}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }} dir="rtl">
+                      <Check size={16} className="text-green-500 shrink-0" />
+                      <p className="text-sm" style={{ color: 'var(--text-primary)' }}>هیچ هەڵەیەک نەدۆزرایەوە — دەقەکە ڕێزمانی بێخەوشە.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+            </div>
           </motion.section>
         ) : activeTab === 'profile' ? (
           <ProfilePage user={user} />

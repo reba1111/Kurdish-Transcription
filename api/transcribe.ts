@@ -4,8 +4,9 @@ import formidable from "formidable";
 import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, probeDurationSeconds } from "../lib/audioChunker";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, probeDurationSeconds } from "../lib/audioChunker";
 import { transcribeLongAudio } from "../lib/chunkedTranscription";
+import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, verifyAndAnnotate } from "../lib/islamicTextVerifier";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -110,6 +111,29 @@ Return ONLY the final fully-vowelled Arabic text — no explanations, no markdow
           .replace(/```/g, "")
           .replace(/<[^>]*>?/gm, "")
           .trim();
+      } else if (process.env.GEMINI_API_KEY && finalOutput.trim()) {
+        // Scribe is a plain ASR — it can't follow tagging instructions itself, so give
+        // its Kurdish output a quick Gemini pass to detect/tag any Quran or Hadith
+        // recitation, then verify the Quran citations. Only worth the extra call when
+        // the output actually contains a meaningful chunk of Arabic script.
+        const arabicCharCount = (finalOutput.match(/[؀-ۿ]/g) || []).length;
+        if (arabicCharCount > 10) {
+          try {
+            const tagPrompt = `The following is a Kurdish (Sorani) speech transcript. If any part of it is a recited Quran ayah or Hadith quotation, mark it using the rules below. Return the FULL text unchanged otherwise — do not translate, summarize, or alter any other wording.${ISLAMIC_TEXT_DETECTION_RULE}
+
+Transcript:
+${finalOutput}`;
+            const tagRes = await ai.models.generateContent({
+              model: "gemini-2.5-flash",
+              config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
+              contents: tagPrompt,
+            });
+            const tagged = (tagRes.text || "").trim();
+            if (tagged) finalOutput = await verifyAndAnnotate(tagged, ai);
+          } catch (e) {
+            console.warn("[Scribe] Quran/Hadith tagging pass failed, keeping raw output:", e);
+          }
+        }
       }
 
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -146,7 +170,7 @@ Strict rules — follow every one without exception:
    - ڤ vs. ف and ق vs. ک where needed
 4. Preserve natural sentence boundaries and punctuation (. ، ؟ !)
 5. Do NOT translate, summarize, or paraphrase — only transcribe.
-6. Return ONLY the plain transcribed text — no markdown, no HTML, no labels, no explanations.`;
+6. Return ONLY the plain transcribed text — no markdown, no HTML, no labels, no explanations.${ISLAMIC_TEXT_DETECTION_RULE}`;
 
 
     const models = selectedModel === 'gemini-pro'
@@ -174,10 +198,12 @@ Strict rules — follow every one without exception:
           mimeType,
           models,
           promptText,
+          useIslamicSystemPrompt: targetLanguage === "ku",
           onChunkStart: (index, total) => {
             console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
             res.write(formatChunkProgressMarker(index, total));
           },
+          onVerifyingStart: () => res.write(formatVerifyingSourcesMarker()),
           onChunkText: (text) => res.write(text),
         });
         return res.end();
@@ -199,13 +225,32 @@ Strict rules — follow every one without exception:
       try {
         const responseStream = await ai.models.generateContentStream({
           model: modelName,
-          config: { temperature: 0 },
+          config: {
+            temperature: 0,
+            ...(targetLanguage === "ku" ? { systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION } : {}),
+          },
           contents: [{ parts: [audioPart, { text: promptText }] }],
         });
 
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.setHeader("Transfer-Encoding", "chunked");
 
+        if (targetLanguage === "ku") {
+          // Buffer the full response so a Quran/Hadith tag never gets cut mid-stream,
+          // then verify ayah citations against AlQuran Cloud before sending.
+          let fullText = "";
+          for await (const chunk of responseStream) {
+            if (chunk.text) fullText += chunk.text;
+          }
+          if (/<quran |<hadith /.test(fullText)) {
+            res.setHeader("Transfer-Encoding", "chunked");
+            res.write(formatVerifyingSourcesMarker());
+          }
+          const annotated = await verifyAndAnnotate(fullText, ai);
+          res.end(annotated);
+          return;
+        }
+
+        res.setHeader("Transfer-Encoding", "chunked");
         for await (const chunk of responseStream) {
           if (chunk.text) res.write(chunk.text);
         }

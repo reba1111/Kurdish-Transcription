@@ -1,12 +1,15 @@
 import fs from "fs";
 import type { GoogleGenAI } from "@google/genai";
 import { cleanupChunks, splitIntoChunks } from "./audioChunker";
+import { ISLAMIC_TEXT_SYSTEM_INSTRUCTION, verifyAndAnnotate } from "./islamicTextVerifier";
 
 const SENTENCE_END_RE = /[.!?؟،۔]/;
+const ANY_TAG_RE = /<\/?(?:quran|hadith)[^>]*>/g;
 
-/** Extracts the last sentence of a transcript, used as continuation context for the next chunk. */
+/** Extracts the last sentence of a transcript, used as continuation context for the next chunk.
+ * Strips quran/hadith tags first so raw markup never leaks into the next chunk's prompt. */
 function lastSentence(text: string): string {
-  const trimmed = text.trim();
+  const trimmed = text.replace(ANY_TAG_RE, "").trim();
   if (!trimmed) return "";
   const matches = [...trimmed.matchAll(new RegExp(SENTENCE_END_RE, "g"))];
   if (matches.length === 0) return trimmed;
@@ -29,9 +32,10 @@ interface TranscribeChunkArgs {
   mimeType: string;
   audioBase64: string;
   promptText: string;
+  useIslamicSystemPrompt?: boolean;
 }
 
-async function transcribeChunkWithFallback({ ai, models, mimeType, audioBase64, promptText }: TranscribeChunkArgs): Promise<string> {
+async function transcribeChunkWithFallback({ ai, models, mimeType, audioBase64, promptText, useIslamicSystemPrompt }: TranscribeChunkArgs): Promise<string> {
   const audioPart = { inlineData: { mimeType, data: audioBase64 } };
 
   let lastError: any = null;
@@ -39,7 +43,10 @@ async function transcribeChunkWithFallback({ ai, models, mimeType, audioBase64, 
     try {
       const result = await ai.models.generateContent({
         model: modelName,
-        config: { temperature: 0 },
+        config: {
+          temperature: 0,
+          ...(useIslamicSystemPrompt ? { systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION } : {}),
+        },
         contents: [{ parts: [audioPart, { text: promptText }] }],
       });
       return result.text || "";
@@ -69,11 +76,15 @@ export async function transcribeLongAudio(args: {
   mimeType: string;
   models: string[];
   promptText: string;
+  /** Set when promptText includes ISLAMIC_TEXT_DETECTION_RULE, so each chunk call also gets the matching system instruction. */
+  useIslamicSystemPrompt?: boolean;
   onChunkStart?: (index: number, total: number) => void;
+  /** Called right before a chunk's Quran/Hadith citations are verified — only fires when the chunk actually contains tags to check. */
+  onVerifyingStart?: () => void;
   /** Called with each chunk's transcribed text as soon as it's ready, for progressive streaming to the client. */
   onChunkText?: (text: string, index: number, total: number) => void;
 }): Promise<string> {
-  const { ai, inputPath, mimeType, models, promptText, onChunkStart, onChunkText } = args;
+  const { ai, inputPath, mimeType, models, promptText, useIslamicSystemPrompt, onChunkStart, onVerifyingStart, onChunkText } = args;
   const chunks = await splitIntoChunks(inputPath);
 
   try {
@@ -93,12 +104,17 @@ export async function transcribeLongAudio(args: {
         mimeType: chunkMimeType,
         audioBase64: chunkBuffer.toString("base64"),
         promptText: finalPrompt,
+        useIslamicSystemPrompt,
       });
 
       const trimmed = text.trim();
-      parts.push(trimmed);
+      // Verify any Quran citations before this chunk's text is forwarded — a no-op
+      // when the chunk contains no <quran> tags (e.g. non-religious or Arabic-translation content).
+      if (/<quran |<hadith /.test(trimmed)) onVerifyingStart?.();
+      const annotated = trimmed ? await verifyAndAnnotate(trimmed, ai) : trimmed;
+      parts.push(annotated);
       if (trimmed) previousTail = lastSentence(trimmed);
-      if (trimmed) onChunkText?.((chunk.index === 0 ? "" : " ") + trimmed, chunk.index, chunks.length);
+      if (annotated) onChunkText?.((chunk.index === 0 ? "" : " ") + annotated, chunk.index, chunks.length);
     }
     return parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
   } finally {
