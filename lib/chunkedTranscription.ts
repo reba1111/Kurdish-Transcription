@@ -2,7 +2,7 @@ import fs from "fs";
 import type { GoogleGenAI } from "@google/genai";
 import { cleanupChunks, splitIntoChunks, type SpeechSegment } from "./audioChunker";
 import { ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "./islamicTextVerifier";
-import { hasCitationHint, looksLikeValidWordList, offsetWords, parseWordTimestampLines, remapWordsToOriginalTime, wordsToText, type TimedWord } from "./wordTimestamps";
+import { looksLikeValidWordList, offsetWords, parseWordTimestampLines, remapWordsToOriginalTime, wordsToText, type TimedWord } from "./wordTimestamps";
 
 const SENTENCE_END_RE = /[.!?؟،۔]/;
 const ANY_TAG_RE = /<\/?(?:quran|hadith)[^>]*>/g;
@@ -77,9 +77,6 @@ interface ChunkWordsResult {
   words: TimedWord[]; // chunk-local timestamps, NOT yet offset to the global timeline
   text: string;
   usedModel: string | null; // null when the prose fallback had to be used (no words available)
-  /** The model's own CITATION:yes/no signal (see WORD_TIMESTAMP_PROMPT) — null when the
-   * prose fallback was used (no such signal in that prompt) or the hint was missing. */
-  citationHint: boolean | null;
 }
 
 /** Same retry-across-models behavior as transcribeChunkWithFallback, but requests
@@ -97,10 +94,9 @@ async function transcribeChunkWordsWithFallback({ ai, models, mimeType, audioBas
         config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
         contents: [{ parts: [audioPart, { text: promptText }] }],
       });
-      const rawText = result.text || "";
-      const parsed = parseWordTimestampLines(rawText);
+      const parsed = parseWordTimestampLines(result.text || "");
       if (looksLikeValidWordList(parsed, chunkDurationSeconds)) {
-        return { words: parsed, text: wordsToText(parsed), usedModel: modelName, citationHint: hasCitationHint(rawText) };
+        return { words: parsed, text: wordsToText(parsed), usedModel: modelName };
       }
       console.warn(`[Chunking] ${modelName} word-timestamp output didn't look valid, trying next model`);
     } catch (err: any) {
@@ -120,7 +116,7 @@ async function transcribeChunkWordsWithFallback({ ai, models, mimeType, audioBas
   });
   const text = result.text || "";
   if (!text) throw lastError || new Error("All models failed");
-  return { words: [], text, usedModel: null, citationHint: null };
+  return { words: [], text, usedModel: null };
 }
 
 /**
@@ -193,7 +189,7 @@ export async function transcribeLongAudio(args: {
           ? proseFallbackPromptText!
           : continuationPrompt(proseFallbackPromptText!, previousTail, chunk.index + 1);
 
-        let { words, text: reconstructed, usedModel, citationHint } = await transcribeChunkWordsWithFallback({
+        let { words, text: reconstructed, usedModel } = await transcribeChunkWordsWithFallback({
           ai,
           models,
           mimeType: chunkMimeType,
@@ -203,10 +199,7 @@ export async function transcribeLongAudio(args: {
           chunkDurationSeconds,
         });
 
-        // Skip the extra text-only tagging call when this chunk's own model already
-        // reported no citation — most chunks are plain speech. A missing/unclear hint
-        // (citationHint === null) still runs the check, never skipping on uncertainty.
-        taggedText = citationHint === false ? reconstructed : await tagIslamicCitations(ai, reconstructed);
+        taggedText = await tagIslamicCitations(ai, reconstructed);
 
         if (wantsProUpgrade && usedModel && usedModel !== "gemini-2.5-pro" && /<quran |<hadith /.test(taggedText)) {
           try {

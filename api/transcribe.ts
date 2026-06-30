@@ -7,7 +7,7 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, trimSilence } from "../lib/audioChunker";
 import { transcribeLongAudio } from "../lib/chunkedTranscription";
 import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "../lib/islamicTextVerifier";
-import { hasCitationHint, looksLikeValidWordList, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "../lib/wordTimestamps";
+import { looksLikeValidWordList, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "../lib/wordTimestamps";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -250,7 +250,6 @@ Strict rules — follow every one without exception:
       let words: TimedWord[] = [];
       let text = "";
       let usedModel = "";
-      let citationHint: boolean | null = null;
 
       for (const modelName of models) {
         try {
@@ -259,13 +258,11 @@ Strict rules — follow every one without exception:
             config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
             contents: [{ parts: [audioPart, { text: promptText }] }],
           });
-          const rawText = result.text || "";
-          const parsed = parseWordTimestampLines(rawText);
+          const parsed = parseWordTimestampLines(result.text || "");
           if (looksLikeValidWordList(parsed, durationSeconds)) {
             words = parsed;
             text = wordsToText(parsed);
             usedModel = modelName;
-            citationHint = hasCitationHint(rawText);
             break;
           }
           console.warn(`[Transcribe] ${modelName} word-timestamp output didn't look valid, trying next model`);
@@ -294,10 +291,7 @@ Strict rules — follow every one without exception:
         }
       }
 
-      // Skip the extra text-only tagging call when the model itself already reported
-      // no citation was recited — most transcripts are plain speech. A missing/unclear
-      // hint (citationHint === null) still runs the check, never skipping on uncertainty.
-      let taggedText = citationHint === false ? text : await tagIslamicCitations(ai, text);
+      let taggedText = await tagIslamicCitations(ai, text);
 
       if (wantsProUpgrade && usedModel && usedModel !== "gemini-2.5-pro" && /<quran |<hadith /.test(taggedText)) {
         // Flash found religious content — re-run this audio through Pro for a more

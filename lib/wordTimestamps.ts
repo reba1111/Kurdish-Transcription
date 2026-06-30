@@ -46,27 +46,9 @@ Example:
 0.80|0.80|،
 0.85|1.40|باشیت
 
-After the last word line, add exactly one more line: CITATION:yes if any part of the audio was a recited Quran ayah or Hadith quotation, or CITATION:no if it was ordinary speech with no such recitation. Always include this line.
-
-Return ONLY the word lines followed by the CITATION line — no markdown, no headers, no explanations, no blank lines, no other commentary.`;
+Return ONLY these lines — no markdown, no headers, no explanations, no blank lines, no commentary.`;
 
 const LINE_RE = /^(\d+(?:\.\d+)?)\|(\d+(?:\.\d+)?)\|(.+)$/;
-const CITATION_HINT_RE = /CITATION:\s*(yes|no)/i;
-
-/** Cheap pre-check using the model's own CITATION:yes/no line (see WORD_TIMESTAMP_PROMPT)
- * to decide whether the separate, more expensive citation-tagging pass is worth running
- * at all. Returns null when the signal is missing or malformed (e.g. output got cut off
- * before reaching it) — callers should treat null as "uncertain" and run the tagging
- * pass anyway, since skipping it is purely a latency optimization, never something that
- * should risk losing a real citation. Can't use a same-script character check instead:
- * Kurdish Sorani is written in the same Arabic Unicode block as the Arabic it's being
- * checked against, so such a check matches almost every Kurdish transcript regardless
- * of whether it contains an actual citation. */
-export function hasCitationHint(raw: string): boolean | null {
-  const match = raw.match(CITATION_HINT_RE);
-  if (!match) return null;
-  return match[1].toLowerCase() === "yes";
-}
 
 /** Parses the "start|end|word" line format. Silently skips any malformed line
  * instead of throwing — by design, a partially-truncated response should still

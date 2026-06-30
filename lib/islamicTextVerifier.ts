@@ -49,10 +49,13 @@ If the speaker recites a Quran ayah or quotes a Hadith, do NOT transcribe it pho
 export async function tagIslamicCitations(ai: GoogleGenAI, text: string): Promise<string> {
   const trimmed = text.trim();
   if (!trimmed) return text;
-  // Only worth the extra call when the text actually contains a meaningful chunk of
-  // Arabic script — plain Kurdish-only speech has nothing to tag.
-  const arabicCharCount = (trimmed.match(/[؀-ۿ]/g) || []).length;
-  if (arabicCharCount <= 10) return text;
+  // Only run the Gemini pass when the text contains Arabic DIACRITIC marks (harakat /
+  // tashkeel — U+064B-U+065F, U+0670, U+06D6-U+06ED). Kurdish Sorani orthography
+  // never uses these marks; they appear in the model's output only when it transcribes
+  // formally-recited classical Arabic (Quran, Hadith). A simple Arabic-Unicode-range
+  // check won't work because Kurdish itself is also written in the Arabic Unicode block.
+  const diacriticCount = (trimmed.match(/[ً-ٰٟۖ-ۭ]/g) || []).length;
+  if (diacriticCount < 3) return text;
 
   try {
     const tagPrompt = `The following is a Kurdish (Sorani) speech transcript. If any part of it is a recited Quran ayah or Hadith quotation, mark it using the rules below. Return the FULL text unchanged otherwise — do not translate, summarize, or alter any other wording.${ISLAMIC_TEXT_DETECTION_RULE}
