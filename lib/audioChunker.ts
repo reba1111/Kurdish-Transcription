@@ -127,24 +127,36 @@ export interface SilenceTrimResult {
   filePath: string;
   /** null when no trimming was applied — callers should use original timestamps as-is. */
   segments: SpeechSegment[] | null;
+  /** Duration of the returned file (trimmed duration if segments is non-null, original
+   * duration otherwise) — callers should use this instead of re-probing, since trimSilence
+   * already determined it from the same ffmpeg pass. */
+  durationSeconds: number;
 }
 
 interface RawInterval { start: number; end: number; }
+interface ProbeWithSilenceResult { duration: number; silences: RawInterval[]; }
 
-/** Runs ffmpeg's silencedetect filter and parses "silence_start"/"silence_end" pairs
- * from its stderr log. An unterminated trailing silence_start (audio ends while still
- * silent) is conservatively dropped rather than guessed at. */
-function detectSilences(inputPath: string): Promise<RawInterval[]> {
-  return new Promise((resolve) => {
+/** Single ffmpeg pass that reads BOTH the duration (from ffmpeg's own startup banner)
+ * and silence intervals (via the silencedetect filter) — both come from the same
+ * decode, so there's no need for a separate duration-only probe before or after this.
+ * An unterminated trailing silence_start (audio ends while still silent) is
+ * conservatively dropped rather than guessed at. */
+function probeWithSilenceDetection(inputPath: string): Promise<ProbeWithSilenceResult> {
+  return new Promise((resolve, reject) => {
     let stderr = "";
     const finish = () => {
-      const starts = [...stderr.matchAll(/silence_start:\s*(-?\d+(?:\.\d+)?)/g)].map(m => parseFloat(m[1]));
-      const ends = [...stderr.matchAll(/silence_end:\s*(-?\d+(?:\.\d+)?)/g)].map(m => parseFloat(m[1]));
-      const intervals: RawInterval[] = [];
+      const durMatch = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      if (!durMatch) { reject(new Error("Could not determine audio duration")); return; }
+      const [, h, m, s] = durMatch;
+      const duration = Number(h) * 3600 + Number(m) * 60 + Number(s);
+
+      const starts = [...stderr.matchAll(/silence_start:\s*(-?\d+(?:\.\d+)?)/g)].map(mt => parseFloat(mt[1]));
+      const ends = [...stderr.matchAll(/silence_end:\s*(-?\d+(?:\.\d+)?)/g)].map(mt => parseFloat(mt[1]));
+      const silences: RawInterval[] = [];
       for (let i = 0; i < Math.min(starts.length, ends.length); i++) {
-        if (ends[i] > starts[i]) intervals.push({ start: starts[i], end: ends[i] });
+        if (ends[i] > starts[i]) silences.push({ start: starts[i], end: ends[i] });
       }
-      resolve(intervals);
+      resolve({ duration, silences });
     };
     ffmpeg(inputPath)
       .audioFilters(`silencedetect=noise=${SILENCE_NOISE_THRESHOLD_DB}:d=${SILENCE_MIN_DURATION_SECONDS}`)
@@ -199,28 +211,37 @@ function buildTrimmedAudio(inputPath: string, outputPath: string, ranges: RawInt
  */
 export async function trimSilence(inputPath: string): Promise<SilenceTrimResult> {
   let totalDuration: number;
+  let silences: RawInterval[];
   try {
-    totalDuration = await probeDurationSeconds(inputPath);
+    const probe = await probeWithSilenceDetection(inputPath);
+    totalDuration = probe.duration;
+    silences = probe.silences;
   } catch {
-    return { filePath: inputPath, segments: null };
+    // Fall back to a plain duration-only probe — callers always need a duration even
+    // when silencedetect itself fails for some reason.
+    try {
+      totalDuration = await probeDurationSeconds(inputPath);
+    } catch {
+      return { filePath: inputPath, segments: null, durationSeconds: 0 };
+    }
+    return { filePath: inputPath, segments: null, durationSeconds: totalDuration };
   }
 
-  const silences = await detectSilences(inputPath);
-  if (silences.length === 0) return { filePath: inputPath, segments: null };
+  if (silences.length === 0) return { filePath: inputPath, segments: null, durationSeconds: totalDuration };
 
   const speechRanges = computeSpeechRanges(silences, totalDuration);
-  if (speechRanges.length === 0) return { filePath: inputPath, segments: null };
+  if (speechRanges.length === 0) return { filePath: inputPath, segments: null, durationSeconds: totalDuration };
 
   const keptDuration = speechRanges.reduce((sum, r) => sum + (r.end - r.start), 0);
   const removedDuration = totalDuration - keptDuration;
-  if (removedDuration < MIN_TOTAL_SILENCE_TO_TRIM_SECONDS) return { filePath: inputPath, segments: null };
+  if (removedDuration < MIN_TOTAL_SILENCE_TO_TRIM_SECONDS) return { filePath: inputPath, segments: null, durationSeconds: totalDuration };
 
   const outputPath = path.join(os.tmpdir(), `trimmed-${crypto.randomBytes(8).toString("hex")}.mp3`);
   try {
     await buildTrimmedAudio(inputPath, outputPath, speechRanges);
   } catch (e) {
     console.warn("[SilenceTrim] Trim encode failed, using original audio:", e);
-    return { filePath: inputPath, segments: null };
+    return { filePath: inputPath, segments: null, durationSeconds: totalDuration };
   }
 
   let trimmedCursor = 0;
@@ -232,7 +253,7 @@ export async function trimSilence(inputPath: string): Promise<SilenceTrimResult>
   });
 
   console.log(`[SilenceTrim] Removed ${removedDuration.toFixed(1)}s of silence (${totalDuration.toFixed(1)}s → ${keptDuration.toFixed(1)}s)`);
-  return { filePath: outputPath, segments };
+  return { filePath: outputPath, segments, durationSeconds: keptDuration };
 }
 
 /**
@@ -240,9 +261,11 @@ export async function trimSilence(inputPath: string): Promise<SilenceTrimResult>
  * Each chunk after the first begins CHUNK_OVERLAP_SECONDS before the previous
  * chunk's end, so spoken words aren't lost at the cut points.
  * Returns the original file untouched (as a single chunk) when shorter than the threshold.
+ * Accepts an already-known duration to skip a redundant probe pass when the caller
+ * has already determined it (e.g. via trimSilence).
  */
-export async function splitIntoChunks(inputPath: string): Promise<AudioChunk[]> {
-  const totalDuration = await probeDurationSeconds(inputPath);
+export async function splitIntoChunks(inputPath: string, knownDurationSeconds?: number): Promise<AudioChunk[]> {
+  const totalDuration = knownDurationSeconds ?? await probeDurationSeconds(inputPath);
 
   if (totalDuration <= CHUNK_THRESHOLD_SECONDS) {
     return [{ filePath: inputPath, start: 0, end: totalDuration, overlapWithPrevious: 0, index: 0 }];

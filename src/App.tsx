@@ -1245,7 +1245,7 @@ export default function App() {
                     >
                       <option value="gemini-pro" className="bg-card">Gemini 2.5 Pro ★ (Smart)</option>
                       <option value="gemini" className="bg-card">Gemini 2.5 Flash</option>
-                      <option value="gemini-flash2" className="bg-card">Gemini 2.0 Flash</option>
+                      <option value="gemini-flash2" className="bg-card">Gemini 2.5 Flash (Fast)</option>
                       <option value="scribe" className="bg-card">ElevenLabs Scribe</option>
                     </select>
                     <ChevronDown size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-dim)' }} />

@@ -231,28 +231,35 @@ async function lookupHadithViaSearch(ai: GoogleGenAI, arabicText: string): Promi
 export async function verifyAndAnnotate(text: string, ai?: GoogleGenAI): Promise<string> {
   let result = text;
 
+  // Each citation's verification is an independent network round-trip (AlQuran Cloud
+  // / Google Search) — run them concurrently instead of one-at-a-time, then apply the
+  // string replacements sequentially afterward (cheap/synchronous, and preserves
+  // correct behavior when the same citation text appears more than once: each
+  // replacement only ever touches the next remaining occurrence).
   const quranMatches = [...text.matchAll(QURAN_TAG_RE)];
-  for (const match of quranMatches) {
+  const quranReplacements = await Promise.all(quranMatches.map(async (match) => {
     const [fullTag, surahHint, ayahHint, innerText] = match;
     const verified = await resolveAyah(surahHint, ayahHint, innerText);
-
     const replacement = verified
       ? `<quran surah="${verified.surahNameArabic}" ayah="${verified.ayahNumber}" verified="true">${verified.text}</quran>`
       : innerText;
-
+    return { fullTag, replacement };
+  }));
+  for (const { fullTag, replacement } of quranReplacements) {
     result = result.replace(fullTag, replacement);
   }
 
   if (ai) {
     const hadithMatches = [...text.matchAll(HADITH_TAG_RE)];
-    for (const match of hadithMatches) {
+    const hadithReplacements = await Promise.all(hadithMatches.map(async (match) => {
       const [fullTag, , innerText] = match;
       const looked = await lookupHadithViaSearch(ai, innerText);
-
       const replacement = looked?.confident
         ? `<hadith narrator="${looked.narrator}" verified="true">${innerText}</hadith>`
         : fullTag.replace('<hadith ', '<hadith verified="false" ');
-
+      return { fullTag, replacement };
+    }));
+    for (const { fullTag, replacement } of hadithReplacements) {
       result = result.replace(fullTag, replacement);
     }
   }

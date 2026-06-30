@@ -107,9 +107,7 @@ Return ONLY the JSON array — no markdown, no explanation.`;
 
     const models = selectedModel === "gemini-pro"
       ? ["gemini-2.5-pro", "gemini-2.5-flash"]
-      : selectedModel === "gemini-flash2"
-        ? ["gemini-2.0-flash"]
-        : ["gemini-2.5-flash", "gemini-2.5-pro"];
+      : ["gemini-2.5-flash", "gemini-2.5-pro"];
 
     let lastError: any = null;
 

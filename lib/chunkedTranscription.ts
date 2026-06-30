@@ -2,7 +2,7 @@ import fs from "fs";
 import type { GoogleGenAI } from "@google/genai";
 import { cleanupChunks, splitIntoChunks, type SpeechSegment } from "./audioChunker";
 import { ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "./islamicTextVerifier";
-import { looksLikeValidWordList, offsetWords, parseWordTimestampLines, remapWordsToOriginalTime, wordsToText, type TimedWord } from "./wordTimestamps";
+import { hasCitationHint, looksLikeValidWordList, offsetWords, parseWordTimestampLines, remapWordsToOriginalTime, wordsToText, type TimedWord } from "./wordTimestamps";
 
 const SENTENCE_END_RE = /[.!?؟،۔]/;
 const ANY_TAG_RE = /<\/?(?:quran|hadith)[^>]*>/g;
@@ -77,6 +77,9 @@ interface ChunkWordsResult {
   words: TimedWord[]; // chunk-local timestamps, NOT yet offset to the global timeline
   text: string;
   usedModel: string | null; // null when the prose fallback had to be used (no words available)
+  /** The model's own CITATION:yes/no signal (see WORD_TIMESTAMP_PROMPT) — null when the
+   * prose fallback was used (no such signal in that prompt) or the hint was missing. */
+  citationHint: boolean | null;
 }
 
 /** Same retry-across-models behavior as transcribeChunkWithFallback, but requests
@@ -94,9 +97,10 @@ async function transcribeChunkWordsWithFallback({ ai, models, mimeType, audioBas
         config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
         contents: [{ parts: [audioPart, { text: promptText }] }],
       });
-      const parsed = parseWordTimestampLines(result.text || "");
+      const rawText = result.text || "";
+      const parsed = parseWordTimestampLines(rawText);
       if (looksLikeValidWordList(parsed, chunkDurationSeconds)) {
-        return { words: parsed, text: wordsToText(parsed), usedModel: modelName };
+        return { words: parsed, text: wordsToText(parsed), usedModel: modelName, citationHint: hasCitationHint(rawText) };
       }
       console.warn(`[Chunking] ${modelName} word-timestamp output didn't look valid, trying next model`);
     } catch (err: any) {
@@ -116,7 +120,7 @@ async function transcribeChunkWordsWithFallback({ ai, models, mimeType, audioBas
   });
   const text = result.text || "";
   if (!text) throw lastError || new Error("All models failed");
-  return { words: [], text, usedModel: null };
+  return { words: [], text, usedModel: null, citationHint: null };
 }
 
 /**
@@ -154,6 +158,9 @@ export async function transcribeLongAudio(args: {
    * (splitIntoChunks) are computed against the TRIMMED file's duration. Omit when
    * inputPath is the original, untrimmed audio. */
   speechSegments?: SpeechSegment[];
+  /** Already-known duration of inputPath (e.g. from trimSilence) — skips a redundant
+   * ffmpeg probe pass inside splitIntoChunks when provided. */
+  knownDurationSeconds?: number;
   onChunkStart?: (index: number, total: number) => void;
   /** Called right before a chunk's Quran/Hadith citations are verified — only fires when the chunk actually contains tags to check. */
   onVerifyingStart?: () => void;
@@ -162,8 +169,8 @@ export async function transcribeLongAudio(args: {
   /** Called with each chunk's word list (already offset to the global timeline) as soon as it's ready. Only fires when useWordTimestamps is set and the chunk produced usable timestamps. */
   onWordsChunk?: (words: TimedWord[]) => void;
 }): Promise<string> {
-  const { ai, inputPath, mimeType, models, promptText, useIslamicSystemPrompt, wantsProUpgrade, useWordTimestamps, proseFallbackPromptText, speechSegments, onChunkStart, onVerifyingStart, onChunkText, onWordsChunk } = args;
-  const chunks = await splitIntoChunks(inputPath);
+  const { ai, inputPath, mimeType, models, promptText, useIslamicSystemPrompt, wantsProUpgrade, useWordTimestamps, proseFallbackPromptText, speechSegments, knownDurationSeconds, onChunkStart, onVerifyingStart, onChunkText, onWordsChunk } = args;
+  const chunks = await splitIntoChunks(inputPath, knownDurationSeconds);
 
   try {
     const parts: string[] = [];
@@ -186,7 +193,7 @@ export async function transcribeLongAudio(args: {
           ? proseFallbackPromptText!
           : continuationPrompt(proseFallbackPromptText!, previousTail, chunk.index + 1);
 
-        let { words, text: reconstructed, usedModel } = await transcribeChunkWordsWithFallback({
+        let { words, text: reconstructed, usedModel, citationHint } = await transcribeChunkWordsWithFallback({
           ai,
           models,
           mimeType: chunkMimeType,
@@ -196,7 +203,10 @@ export async function transcribeLongAudio(args: {
           chunkDurationSeconds,
         });
 
-        taggedText = await tagIslamicCitations(ai, reconstructed);
+        // Skip the extra text-only tagging call when this chunk's own model already
+        // reported no citation — most chunks are plain speech. A missing/unclear hint
+        // (citationHint === null) still runs the check, never skipping on uncertainty.
+        taggedText = citationHint === false ? reconstructed : await tagIslamicCitations(ai, reconstructed);
 
         if (wantsProUpgrade && usedModel && usedModel !== "gemini-2.5-pro" && /<quran |<hadith /.test(taggedText)) {
           try {

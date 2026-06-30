@@ -9,12 +9,12 @@ import os from "os";
 import crypto from "crypto";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, probeDurationSeconds, trimSilence } from "./lib/audioChunker";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, trimSilence } from "./lib/audioChunker";
 import { transcribeLongAudio } from "./lib/chunkedTranscription";
 import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "./lib/islamicTextVerifier";
 import { searchHadithByMeaning } from "./lib/hadithSearch";
 import { correctArabicGrammar } from "./lib/arabicGrammarCorrector";
-import { looksLikeValidWordList, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "./lib/wordTimestamps";
+import { hasCitationHint, looksLikeValidWordList, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "./lib/wordTimestamps";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -224,8 +224,8 @@ Rules:
     // Plain speech, which is the vast majority of usage, never touches Pro at all.
     const wantsProUpgrade = selectedModel === 'gemini-pro';
     const models = selectedModel === 'gemini-flash2'
-      ? ["gemini-2.0-flash"]
-      : ["gemini-2.5-flash", "gemini-2.0-flash"];
+      ? ["gemini-2.5-flash"]
+      : ["gemini-2.5-flash"];
 
     // Long files get split into overlapping 5-minute chunks so each request stays
     // fast and reliable; short files keep the original single-shot streaming path.
@@ -244,12 +244,8 @@ Rules:
       finalMimeType = "audio/mpeg"; // trimSilence always re-encodes to mp3
     }
 
-    let durationSeconds = 0;
-    try {
-      durationSeconds = await probeDurationSeconds(effectiveInputPath);
-    } catch (e) {
-      console.warn("[Chunking] Duration probe failed, falling back to single-shot transcription:", e);
-    }
+    // Duration already came from trimSilence's own probe — no need to re-probe here.
+    const durationSeconds = trimResult.durationSeconds;
 
     if (durationSeconds > CHUNK_THRESHOLD_SECONDS) {
       try {
@@ -266,6 +262,7 @@ Rules:
           useWordTimestamps: targetLanguage === 'ku',
           proseFallbackPromptText: targetLanguage === 'ku' ? kurdishProseFallbackPrompt : undefined,
           speechSegments: speechSegments ?? undefined,
+          knownDurationSeconds: durationSeconds,
           onChunkStart: (index, total) => {
             console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
             res.write(formatChunkProgressMarker(index, total));
@@ -303,6 +300,7 @@ Rules:
       let words: TimedWord[] = [];
       let text = "";
       let usedModel = "";
+      let citationHint: boolean | null = null;
 
       for (const modelName of models) {
         try {
@@ -311,11 +309,13 @@ Rules:
             config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
             contents: [{ parts: [audioPart, { text: promptText }] }],
           });
-          const parsed = parseWordTimestampLines(result.text || "");
+          const rawText = result.text || "";
+          const parsed = parseWordTimestampLines(rawText);
           if (looksLikeValidWordList(parsed, durationSeconds)) {
             words = parsed;
             text = wordsToText(parsed);
             usedModel = modelName;
+            citationHint = hasCitationHint(rawText);
             break;
           }
           console.warn(`[Transcribe] ${modelName} word-timestamp output didn't look valid, trying next model`);
@@ -344,7 +344,10 @@ Rules:
         }
       }
 
-      let taggedText = await tagIslamicCitations(ai, text);
+      // Skip the extra text-only tagging call when the model itself already reported
+      // no citation was recited — most transcripts are plain speech. A missing/unclear
+      // hint (citationHint === null) still runs the check, never skipping on uncertainty.
+      let taggedText = citationHint === false ? text : await tagIslamicCitations(ai, text);
 
       if (wantsProUpgrade && usedModel && usedModel !== "gemini-2.5-pro" && /<quran |<hadith /.test(taggedText)) {
         // Flash found religious content — re-run this audio through Pro for a more
@@ -512,9 +515,7 @@ Return ONLY the JSON array — no markdown, no explanation.`;
 
     const models = selectedModel === "gemini-pro"
       ? ["gemini-2.5-flash", "gemini-2.5-pro"]
-      : selectedModel === "gemini-flash2"
-        ? ["gemini-2.0-flash"]
-        : ["gemini-2.5-flash", "gemini-2.5-pro"];
+      : ["gemini-2.5-flash", "gemini-2.5-pro"];
 
     let lastError: any = null;
 
