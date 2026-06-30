@@ -90,6 +90,35 @@ export function offsetWords(words: TimedWord[], offsetSeconds: number): TimedWor
   return words.map(w => ({ ...w, start: w.start + offsetSeconds, end: w.end + offsetSeconds }));
 }
 
+/** Maps a timestamp measured in TRIMMED-audio time back to the ORIGINAL (untrimmed)
+ * audio's timeline, using the kept-segment list from trimSilence. The browser always
+ * plays back the original file, so every timestamp the model reports (relative to the
+ * silence-trimmed audio it actually heard) must be remapped before reaching the
+ * client. Falls back to returning the value unchanged if it doesn't fall in any kept
+ * segment (shouldn't normally happen, but fails safe rather than throwing). */
+function remapTrimmedTime(trimmedSeconds: number, segments: { origStart: number; origEnd: number; trimmedStart: number; trimmedEnd: number }[]): number {
+  for (const seg of segments) {
+    if (trimmedSeconds >= seg.trimmedStart && trimmedSeconds <= seg.trimmedEnd) {
+      return seg.origStart + (trimmedSeconds - seg.trimmedStart);
+    }
+  }
+  // Past the last segment (e.g. a word's "end" lands exactly on the trimmed
+  // duration) — anchor to the last segment's original-time end plus the overrun.
+  const last = segments[segments.length - 1];
+  if (last && trimmedSeconds > last.trimmedEnd) return last.origEnd + (trimmedSeconds - last.trimmedEnd);
+  return trimmedSeconds;
+}
+
+/** Remaps every word's start/end from trimmed-audio time to original-audio time. */
+export function remapWordsToOriginalTime(words: TimedWord[], segments: { origStart: number; origEnd: number; trimmedStart: number; trimmedEnd: number }[]): TimedWord[] {
+  if (segments.length === 0) return words;
+  return words.map(w => ({
+    ...w,
+    start: remapTrimmedTime(w.start, segments),
+    end: remapTrimmedTime(w.end, segments),
+  }));
+}
+
 /** Sanity check that a parsed word list looks like a real transcription rather than a
  * near-total parse failure (e.g. the model ignored the line format and returned prose,
  * or a refusal). Callers should fall back to a plain-prose retry when this is false,

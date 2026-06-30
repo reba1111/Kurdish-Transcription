@@ -1,8 +1,8 @@
 import fs from "fs";
 import type { GoogleGenAI } from "@google/genai";
-import { cleanupChunks, splitIntoChunks } from "./audioChunker";
+import { cleanupChunks, splitIntoChunks, type SpeechSegment } from "./audioChunker";
 import { ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "./islamicTextVerifier";
-import { looksLikeValidWordList, offsetWords, parseWordTimestampLines, wordsToText, type TimedWord } from "./wordTimestamps";
+import { looksLikeValidWordList, offsetWords, parseWordTimestampLines, remapWordsToOriginalTime, wordsToText, type TimedWord } from "./wordTimestamps";
 
 const SENTENCE_END_RE = /[.!?؟،۔]/;
 const ANY_TAG_RE = /<\/?(?:quran|hadith)[^>]*>/g;
@@ -148,6 +148,12 @@ export async function transcribeLongAudio(args: {
    */
   useWordTimestamps?: boolean;
   proseFallbackPromptText?: string;
+  /** Kept-segment map from trimSilence, when inputPath is a silence-trimmed file —
+   * remaps each chunk's (already chunk-offset) word timestamps from the trimmed
+   * audio's timeline back to the original upload's timeline, since chunk boundaries
+   * (splitIntoChunks) are computed against the TRIMMED file's duration. Omit when
+   * inputPath is the original, untrimmed audio. */
+  speechSegments?: SpeechSegment[];
   onChunkStart?: (index: number, total: number) => void;
   /** Called right before a chunk's Quran/Hadith citations are verified — only fires when the chunk actually contains tags to check. */
   onVerifyingStart?: () => void;
@@ -156,7 +162,7 @@ export async function transcribeLongAudio(args: {
   /** Called with each chunk's word list (already offset to the global timeline) as soon as it's ready. Only fires when useWordTimestamps is set and the chunk produced usable timestamps. */
   onWordsChunk?: (words: TimedWord[]) => void;
 }): Promise<string> {
-  const { ai, inputPath, mimeType, models, promptText, useIslamicSystemPrompt, wantsProUpgrade, useWordTimestamps, proseFallbackPromptText, onChunkStart, onVerifyingStart, onChunkText, onWordsChunk } = args;
+  const { ai, inputPath, mimeType, models, promptText, useIslamicSystemPrompt, wantsProUpgrade, useWordTimestamps, proseFallbackPromptText, speechSegments, onChunkStart, onVerifyingStart, onChunkText, onWordsChunk } = args;
   const chunks = await splitIntoChunks(inputPath);
 
   try {
@@ -214,7 +220,10 @@ export async function transcribeLongAudio(args: {
         }
 
         text = reconstructed;
-        if (words.length > 0) onWordsChunk?.(offsetWords(words, chunk.start));
+        if (words.length > 0) {
+          const globalWords = offsetWords(words, chunk.start);
+          onWordsChunk?.(speechSegments ? remapWordsToOriginalTime(globalWords, speechSegments) : globalWords);
+        }
       } else {
         text = await transcribeChunkWithFallback({
           ai,

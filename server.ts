@@ -9,12 +9,12 @@ import os from "os";
 import crypto from "crypto";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, probeDurationSeconds } from "./lib/audioChunker";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, probeDurationSeconds, trimSilence } from "./lib/audioChunker";
 import { transcribeLongAudio } from "./lib/chunkedTranscription";
 import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "./lib/islamicTextVerifier";
 import { searchHadithByMeaning } from "./lib/hadithSearch";
 import { correctArabicGrammar } from "./lib/arabicGrammarCorrector";
-import { looksLikeValidWordList, parseWordTimestampLines, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "./lib/wordTimestamps";
+import { looksLikeValidWordList, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "./lib/wordTimestamps";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -231,9 +231,22 @@ Rules:
     // fast and reliable; short files keep the original single-shot streaming path.
     const tempInputPath = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".mp3");
     fs.writeFileSync(tempInputPath, finalBuffer);
+
+    // Both Gemini and ElevenLabs bill audio by duration, so long dead-air stretches
+    // (common in lectures/meetings) cost real money for nothing. Cut them out before
+    // any model sees the file. trimSilence fails open (returns tempInputPath
+    // unchanged) on any detection/encode error.
+    const trimResult = await trimSilence(tempInputPath);
+    const effectiveInputPath = trimResult.filePath;
+    const speechSegments = trimResult.segments;
+    if (speechSegments) {
+      finalBuffer = fs.readFileSync(effectiveInputPath);
+      finalMimeType = "audio/mpeg"; // trimSilence always re-encodes to mp3
+    }
+
     let durationSeconds = 0;
     try {
-      durationSeconds = await probeDurationSeconds(tempInputPath);
+      durationSeconds = await probeDurationSeconds(effectiveInputPath);
     } catch (e) {
       console.warn("[Chunking] Duration probe failed, falling back to single-shot transcription:", e);
     }
@@ -244,7 +257,7 @@ Rules:
         res.setHeader("Transfer-Encoding", "chunked");
         await transcribeLongAudio({
           ai,
-          inputPath: tempInputPath,
+          inputPath: effectiveInputPath,
           mimeType: finalMimeType,
           models,
           promptText,
@@ -252,6 +265,7 @@ Rules:
           wantsProUpgrade,
           useWordTimestamps: targetLanguage === 'ku',
           proseFallbackPromptText: targetLanguage === 'ku' ? kurdishProseFallbackPrompt : undefined,
+          speechSegments: speechSegments ?? undefined,
           onChunkStart: (index, total) => {
             console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
             res.write(formatChunkProgressMarker(index, total));
@@ -264,9 +278,11 @@ Rules:
         return;
       } finally {
         try { fs.unlinkSync(tempInputPath); } catch {}
+        if (speechSegments) { try { fs.unlinkSync(effectiveInputPath); } catch {} }
       }
     }
     try { fs.unlinkSync(tempInputPath); } catch {}
+    if (speechSegments) { try { fs.unlinkSync(effectiveInputPath); } catch {} }
 
     const audioPart = {
       inlineData: {
@@ -358,7 +374,8 @@ Rules:
       const annotated = await verifyAndAnnotate(taggedText, ai);
       if (words.length > 0) {
         res.setHeader("Transfer-Encoding", "chunked");
-        res.write(formatWordsMarker(words));
+        const originalTimeWords = speechSegments ? remapWordsToOriginalTime(words, speechSegments) : words;
+        res.write(formatWordsMarker(originalTimeWords));
       }
       res.end(annotated);
       return;

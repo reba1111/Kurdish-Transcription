@@ -4,10 +4,10 @@ import formidable from "formidable";
 import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, probeDurationSeconds } from "../lib/audioChunker";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, probeDurationSeconds, trimSilence } from "../lib/audioChunker";
 import { transcribeLongAudio } from "../lib/chunkedTranscription";
 import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "../lib/islamicTextVerifier";
-import { looksLikeValidWordList, parseWordTimestampLines, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "../lib/wordTimestamps";
+import { looksLikeValidWordList, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "../lib/wordTimestamps";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -57,12 +57,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const targetLanguage = (Array.isArray(fields.language) ? fields.language[0] : fields.language) || "ku";
     const selectedModel = (Array.isArray(fields.model) ? fields.model[0] : fields.model) || "gemini";
 
-    const fileBuffer = fs.readFileSync(audioFile.filepath);
     let mimeType = audioFile.mimetype || "audio/mpeg";
     if (mimeType === "application/ogg") mimeType = "audio/ogg";
     if (mimeType === "video/webm") mimeType = "audio/webm";
     if (mimeType === "video/mp4") mimeType = "audio/mp4";
 
+    // Both Gemini and ElevenLabs bill audio by duration, so long dead-air stretches
+    // (common in lectures/meetings) cost real money for nothing. Cut them out before
+    // any model sees the file — every downstream path uses this effective file/buffer/
+    // mimeType instead of the raw upload. trimSilence fails open (returns the original
+    // file untouched) on any detection/encode error.
+    const trimResult = await trimSilence(audioFile.filepath);
+    const effectiveFilePath = trimResult.filePath;
+    const speechSegments = trimResult.segments;
+    const fileBuffer = fs.readFileSync(effectiveFilePath);
+    if (speechSegments) mimeType = "audio/mpeg"; // trimSilence always re-encodes to mp3
+
+    try {
     // SCRIBE PATH
     if (selectedModel === "scribe") {
       if (!process.env.ELEVENLABS_API_KEY) {
@@ -189,7 +200,7 @@ Strict rules — follow every one without exception:
     // request stays fast and reliable; short files keep single-shot streaming.
     let durationSeconds = 0;
     try {
-      durationSeconds = await probeDurationSeconds(audioFile.filepath);
+      durationSeconds = await probeDurationSeconds(effectiveFilePath);
     } catch (e) {
       console.warn("[Chunking] Duration probe failed, falling back to single-shot transcription:", e);
     }
@@ -200,7 +211,7 @@ Strict rules — follow every one without exception:
         res.setHeader("Transfer-Encoding", "chunked");
         await transcribeLongAudio({
           ai,
-          inputPath: audioFile.filepath,
+          inputPath: effectiveFilePath,
           mimeType,
           models,
           promptText,
@@ -208,6 +219,7 @@ Strict rules — follow every one without exception:
           wantsProUpgrade,
           useWordTimestamps: targetLanguage === "ku",
           proseFallbackPromptText: targetLanguage === "ku" ? kurdishProseFallbackPrompt : undefined,
+          speechSegments: speechSegments ?? undefined,
           onChunkStart: (index, total) => {
             console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
             res.write(formatChunkProgressMarker(index, total));
@@ -312,7 +324,8 @@ Strict rules — follow every one without exception:
       const annotated = await verifyAndAnnotate(taggedText, ai);
       if (words.length > 0) {
         res.setHeader("Transfer-Encoding", "chunked");
-        res.write(formatWordsMarker(words));
+        const originalTimeWords = speechSegments ? remapWordsToOriginalTime(words, speechSegments) : words;
+        res.write(formatWordsMarker(originalTimeWords));
       }
       res.end(annotated);
       return;
@@ -348,6 +361,9 @@ Strict rules — follow every one without exception:
     }
 
     throw friendlyQuotaError(lastError);
+    } finally {
+      if (speechSegments) { try { fs.unlinkSync(effectiveFilePath); } catch {} }
+    }
   } catch (error: any) {
     console.error("Transcription error:", error);
     if (!res.headersSent) {
