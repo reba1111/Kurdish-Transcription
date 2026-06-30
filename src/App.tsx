@@ -5,13 +5,20 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles, Sun, Moon, Monitor } from "lucide-react";
+import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles, Sun, Moon, Monitor, SpellCheck } from "lucide-react";
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from "firebase/auth";
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import AuthPage from "./AuthPage";
 import ProfilePage from "./ProfilePage";
 import { useTheme } from "./useTheme";
+import { compressAudioToMp3 } from "./audioCompress";
+
+// Vercel serverless functions reject any request body over 4.5MB (hard platform
+// limit, not configurable). Audio above this raw size must be compressed client-side
+// before upload regardless of the user's compression preference, or the upload will
+// always fail with a 413 — this is a correctness floor, not a quality choice.
+const VERCEL_BODY_SIZE_LIMIT = 4.5 * 1024 * 1024;
 
 type HistoryItem = {
   id: string;
@@ -20,6 +27,188 @@ type HistoryItem = {
   timestamp: number;
   model?: string;
 };
+
+// Matches the out-of-band chunk-progress markers the server interleaves into the
+// streamed transcript for long audio files (see lib/audioChunker.ts on the server).
+const CHUNK_PROGRESS_NUL = String.fromCharCode(0);
+const CHUNK_PROGRESS_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "CHUNK_PROGRESS:(\\d+)/(\\d+)" + CHUNK_PROGRESS_NUL, "g");
+// Marks the moment the server starts verifying a detected Quran ayah or Hadith
+// (AlQuran Cloud lookup / Google Search Grounding), which adds noticeable latency.
+const VERIFYING_SOURCES_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "VERIFYING_SOURCES" + CHUNK_PROGRESS_NUL, "g");
+// Carries a JSON-encoded TimedWord[] chunk, embedded so the karaoke/subtitle word
+// list arrives for free as part of the main transcription instead of needing a
+// second audio call (see lib/audioChunker.ts's formatWordsMarker on the server).
+const WORDS_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "WORDS:([\\s\\S]*?)" + CHUNK_PROGRESS_NUL, "g");
+
+// Matches <quran surah="..." ayah="..." verified="true|false">text</quran> and
+// <hadith narrator="..." verified="true|false">text</hadith> tags the server may embed
+// in a Kurdish transcript when it recognizes recited Quran/Hadith (see lib/islamicTextVerifier.ts).
+const QURAN_TAG_RE = /<quran surah="([^"]*)" ayah="([^"]*)"(?: verified="(true|false)")?>([\s\S]*?)<\/quran>/g;
+const HADITH_TAG_RE = /<hadith narrator="([^"]*)"(?: verified="(true|false)")?>([\s\S]*?)<\/hadith>/g;
+
+interface CitationSegment {
+  kind: 'quran' | 'hadith';
+  text: string;
+  surah?: string;
+  ayah?: string;
+  verified?: boolean;
+  narrator?: string;
+}
+
+/** Formats a citation segment as ﴿ayah text﴾ [سورة Name - آية N] / [رواه Narrator], matching the
+ * Quranic-bracket convention used in printed Islamic texts. */
+function formatCitationBracket(seg: CitationSegment): string {
+  const quote = `﴿${seg.text}﴾`;
+  const source = seg.kind === 'quran' ? `[سورة ${seg.surah} - آية ${seg.ayah}]` : `[رواه ${seg.narrator}]`;
+  return `${quote} ${source}`;
+}
+
+/** Strips citation tags down to ﴿text﴾ [source] bracket notation, for copy/export/history. */
+function stripCitationTags(text: string): string {
+  return text
+    .replace(QURAN_TAG_RE, (_m, surah, ayah, verified, inner) => formatCitationBracket({ kind: 'quran', surah, ayah, verified: verified === 'true', text: inner }))
+    .replace(HADITH_TAG_RE, (_m, narrator, verified, inner) => formatCitationBracket({ kind: 'hadith', narrator, verified: verified === 'true', text: inner }));
+}
+
+/** Splits transcription text into plain-text and citation segments for rendering. */
+function parseCitationSegments(text: string): (string | CitationSegment)[] {
+  const combined = new RegExp(`${QURAN_TAG_RE.source}|${HADITH_TAG_RE.source}`, 'g');
+  const segments: (string | CitationSegment)[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = combined.exec(text))) {
+    if (match.index > lastIndex) segments.push(text.slice(lastIndex, match.index));
+    if (match[1] !== undefined) {
+      segments.push({ kind: 'quran', surah: match[1], ayah: match[2], verified: match[3] === 'true', text: match[4] });
+    } else {
+      segments.push({ kind: 'hadith', narrator: match[5], verified: match[6] === 'true', text: match[7] });
+    }
+    lastIndex = combined.lastIndex;
+  }
+  if (lastIndex < text.length) segments.push(text.slice(lastIndex));
+  return segments;
+}
+
+type TimedWord = { word: string; start: number; end: number };
+interface SubtitleCue { start: number; end: number; lines: string[]; }
+
+function formatSubtitleTimestamp(seconds: number, format: 'srt' | 'vtt'): string {
+  const totalMs = Math.max(0, Math.round(seconds * 1000));
+  const h = Math.floor(totalMs / 3600000);
+  const m = Math.floor((totalMs % 3600000) / 60000);
+  const s = Math.floor((totalMs % 60000) / 1000);
+  const ms = totalMs % 1000;
+  const pad = (n: number, len = 2) => String(n).padStart(len, '0');
+  const sep = format === 'srt' ? ',' : '.';
+  return `${pad(h)}:${pad(m)}:${pad(s)}${sep}${pad(ms, 3)}`;
+}
+
+/** Wraps a cue's text into at most maxLines lines of at most maxCharsPerLine chars each. */
+function wrapSubtitleText(text: string, maxCharsPerLine = 42, maxLines = 2): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = '';
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (candidate.length > maxCharsPerLine && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.slice(0, maxLines);
+}
+
+/** Groups word-level timestamps (already fetched for the karaoke highlight view) into
+ * subtitle cues, breaking on long pauses or once a cue grows too long to read
+ * comfortably — built locally from data we already have instead of paying for a
+ * second Gemini audio pass just to re-derive cue timing. */
+function buildSubtitleCues(words: TimedWord[]): SubtitleCue[] {
+  const MAX_CUE_CHARS = 84; // 2 lines x 42 chars
+  const MAX_CUE_DURATION = 7; // seconds
+  const PAUSE_BREAK = 0.8; // seconds
+
+  const raw: { start: number; end: number; text: string }[] = [];
+  let cur: { start: number; end: number; text: string } | null = null;
+
+  for (const w of words) {
+    const word = w.word.trim();
+    if (!word) continue;
+    if (cur) {
+      const gap = w.start - cur.end;
+      const candidate = `${cur.text} ${word}`;
+      const duration = w.end - cur.start;
+      if (gap > PAUSE_BREAK || candidate.length > MAX_CUE_CHARS || duration > MAX_CUE_DURATION) {
+        raw.push(cur);
+        cur = { start: w.start, end: w.end, text: word };
+      } else {
+        cur.text = candidate;
+        cur.end = w.end;
+      }
+    } else {
+      cur = { start: w.start, end: w.end, text: word };
+    }
+  }
+  if (cur) raw.push(cur);
+
+  return raw.map(c => ({ start: c.start, end: c.end, lines: wrapSubtitleText(c.text) }));
+}
+
+function buildSRT(cues: SubtitleCue[]): string {
+  return cues
+    .map((c, i) => `${i + 1}\n${formatSubtitleTimestamp(c.start, 'srt')} --> ${formatSubtitleTimestamp(c.end, 'srt')}\n${c.lines.join('\n')}`)
+    .join('\n\n');
+}
+
+function buildVTT(cues: SubtitleCue[]): string {
+  return 'WEBVTT\n\n' + cues
+    .map(c => `${formatSubtitleTimestamp(c.start, 'vtt')} --> ${formatSubtitleTimestamp(c.end, 'vtt')}\n${c.lines.join('\n')}`)
+    .join('\n\n');
+}
+
+/** Splits correctedText into plain/highlighted segments by locating each error's
+ * `corrected` substring in order. Falls back to treating an unlocatable substring as
+ * plain text rather than throwing — Gemini's error entries are free-form and won't
+ * always be an exact substring match. */
+function buildGrammarDiffSegments(correctedText: string, errors: { corrected: string }[]): { text: string; changed: boolean }[] {
+  const segments: { text: string; changed: boolean }[] = [];
+  let cursor = 0;
+  for (const err of errors) {
+    if (!err.corrected) continue;
+    const idx = correctedText.indexOf(err.corrected, cursor);
+    if (idx === -1) continue;
+    if (idx > cursor) segments.push({ text: correctedText.slice(cursor, idx), changed: false });
+    segments.push({ text: err.corrected, changed: true });
+    cursor = idx + err.corrected.length;
+  }
+  if (cursor < correctedText.length) segments.push({ text: correctedText.slice(cursor), changed: false });
+  return segments;
+}
+
+/** Renders a transcription string, showing Quran/Hadith citations in ﴿ ﴾ [source] bracket notation
+ * with a verified badge, distinct from the surrounding plain Kurdish text. */
+function TranscriptionWithCitations({ text }: { text: string }) {
+  const segments = parseCitationSegments(text);
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (typeof seg === 'string') return <span key={i}>{seg}</span>;
+        const isQuran = seg.kind === 'quran';
+        return (
+          <span key={i} className="inline align-baseline mx-1 px-1.5 py-0.5 rounded" dir="rtl"
+            style={{ background: isQuran ? 'rgba(34,197,94,0.08)' : 'rgba(168,85,247,0.08)' }}
+          >
+            <span className="font-semibold text-[1.15em] leading-loose" style={{ fontFamily: "'Amiri Quran', 'Traditional Arabic', 'Scheherazade New', serif" }}>{formatCitationBracket(seg)}</span>
+            {seg.verified && <span className="text-green-500 text-sm align-super"> ✓</span>}
+            {!seg.verified && <span className="text-amber-500 text-xs"> (دڵنیا نییت)</span>}
+          </span>
+        );
+      })}
+    </>
+  );
+}
 
 export default function App() {
   const { theme, setTheme } = useTheme();
@@ -36,7 +225,7 @@ export default function App() {
   const [targetLanguage, setTargetLanguage] = useState<'ku' | 'ar'>('ku');
   const [selectedModel, setSelectedModel] = useState<'gemini-pro' | 'gemini' | 'gemini-flash2' | 'scribe'>('gemini-pro');
   const [shouldCompress, setShouldCompress] = useState(true);
-  const [activeTab, setActiveTab] = useState<'transcribe' | 'library' | 'profile'>('transcribe');
+  const [activeTab, setActiveTab] = useState<'transcribe' | 'library' | 'hadith-search' | 'arabic-grammar' | 'profile'>('transcribe');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | 'all' | null>(null);
@@ -51,8 +240,22 @@ export default function App() {
   const [showSummary, setShowSummary] = useState(false);
   const [isExportingSubtitles, setIsExportingSubtitles] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
+  const [timedWords, setTimedWords] = useState<TimedWord[]>([]);
+  const [isTimedTranscribing, setIsTimedTranscribing] = useState(false);
+  const [showTimedView, setShowTimedView] = useState(false);
   const [processStage, setProcessStage] = useState<'idle'|'compressing'|'uploading'|'transcribing'>('idle');
+  const [chunkProgress, setChunkProgress] = useState<{ current: number; total: number } | null>(null);
+  const [isVerifyingSources, setIsVerifyingSources] = useState(false);
+  const [hadithQuery, setHadithQuery] = useState('');
+  const [hadithResults, setHadithResults] = useState<{ arabicText: string; narrator: string; book: string; chapter?: string; grading?: string; verified: boolean }[]>([]);
+  const [isSearchingHadith, setIsSearchingHadith] = useState(false);
+  const [hadithSearchError, setHadithSearchError] = useState<string | null>(null);
+  const [grammarInput, setGrammarInput] = useState('');
+  const [grammarResult, setGrammarResult] = useState<{ correctedText: string; errors: { original: string; corrected: string; type: string; explanation: string }[] } | null>(null);
+  const [isCorrectingGrammar, setIsCorrectingGrammar] = useState(false);
+  const [grammarError, setGrammarError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const timedAbortControllerRef = useRef<AbortController | null>(null);
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
 
@@ -61,6 +264,7 @@ export default function App() {
   const [sliderMax, setSliderMax] = useState(100); // 0–100
   const [currentPct, setCurrentPct] = useState(0); // playback position 0–100
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef<'min'|'max'|'scrubber'|null>(null);
 
@@ -97,31 +301,47 @@ export default function App() {
     return unsub;
   }, []);
 
-  // Sync audio currentTime → currentPct; enforce loop between sliderMin–sliderMax
+  // Sync audio currentTime → currentPct; enforce loop between sliderMin–sliderMax.
+  // Uses requestAnimationFrame instead of the 'timeupdate' event: timeupdate fires at
+  // a roughly fixed WALL-CLOCK interval (~4x/sec) regardless of playbackRate, so at
+  // higher speeds the media-time gap between updates grows and can skip over short
+  // words entirely — breaking the karaoke highlight above 1x. rAF samples currentTime
+  // every screen refresh, so no word-sized window gets missed at any speed.
   useEffect(() => {
     const el = audioElRef.current;
     if (!el) return;
-    const onTime = () => {
-      if (!audioDuration) return;
-      const pct = (el.currentTime / audioDuration) * 100;
-      setCurrentPct(pct);
-      const maxTime = (sliderMax / 100) * audioDuration;
-      if (el.currentTime >= maxTime) {
-        el.currentTime = (sliderMin / 100) * audioDuration;
-        if (!el.paused) el.play();
+    let rafId: number;
+    const tick = () => {
+      if (audioDuration > 0) {
+        const pct = (el.currentTime / audioDuration) * 100;
+        setCurrentPct(pct);
+        const maxTime = (sliderMax / 100) * audioDuration;
+        if (el.currentTime >= maxTime) {
+          el.currentTime = (sliderMin / 100) * audioDuration;
+          if (!el.paused) el.play();
+        }
       }
+      rafId = requestAnimationFrame(tick);
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    el.addEventListener('timeupdate', onTime);
     el.addEventListener('play', onPlay);
     el.addEventListener('pause', onPause);
+    rafId = requestAnimationFrame(tick);
     return () => {
-      el.removeEventListener('timeupdate', onTime);
+      cancelAnimationFrame(rafId);
       el.removeEventListener('play', onPlay);
       el.removeEventListener('pause', onPause);
     };
   }, [audioDuration, sliderMin, sliderMax]);
+
+  // Apply the selected playback speed to the audio element whenever it changes
+  // (and whenever a new file is loaded), so karaoke-highlight review can be sped
+  // through or slowed down to catch transcription errors more easily.
+  useEffect(() => {
+    const el = audioElRef.current;
+    if (el) el.playbackRate = playbackRate;
+  }, [playbackRate, audioUrl]);
 
   // Mouse/touch drag logic for dual-range and scrubber
   useEffect(() => {
@@ -174,9 +394,10 @@ export default function App() {
 
   const saveToHistory = async (item: Omit<HistoryItem, 'id'>) => {
     if (!user) return;
+    const cleanItem = { ...item, text: stripCitationTags(item.text) };
     try {
-      const ref = await addDoc(collection(db, "users", user.uid, "history"), item);
-      setHistory(prev => [{ id: ref.id, ...item }, ...prev].slice(0, 100));
+      const ref = await addDoc(collection(db, "users", user.uid, "history"), cleanItem);
+      setHistory(prev => [{ id: ref.id, ...cleanItem }, ...prev].slice(0, 100));
     } catch (err: any) {
       console.error("saveToHistory ERROR:", err.code, err.message);
       if (err?.code === 'permission-denied') {
@@ -255,6 +476,8 @@ export default function App() {
     abortControllerRef.current = null;
     setIsTranscribing(false);
     setProcessStage('idle');
+    setChunkProgress(null);
+    setIsVerifyingSources(false);
   };
 
   const runTranscription = async (blob: Blob, langToUse: 'ku' | 'ar', compress: boolean) => {
@@ -264,16 +487,36 @@ export default function App() {
     setError(null);
     setTranscription("");
     setIsEditingTranscription(false);
+    setTimedWords([]);
+    setShowTimedView(false);
+    setChunkProgress(null);
+    setIsVerifyingSources(false);
 
     try {
-      setProcessStage(compress ? 'compressing' : 'uploading');
+      const needsCompression = compress || blob.size > VERCEL_BODY_SIZE_LIMIT;
+      let uploadBlob = blob;
+      if (needsCompression) {
+        setProcessStage('compressing');
+        try {
+          uploadBlob = await compressAudioToMp3(blob);
+        } catch {
+          // Decoding/encoding failed — fall back to the original blob. If it's over
+          // the limit the upload will fail with a clear 413 below rather than silently.
+          uploadBlob = blob;
+        }
+      }
+      if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) {
+        setError("دەنگەکە تەنانەت دوای بچووککردنەوەش زۆر گەورەیە. تکایە کورتکراوەیەکی کەمتری دەنگەکە باربکە.");
+        return;
+      }
+
+      setProcessStage('uploading');
       const formData = new FormData();
-      formData.append("audio", blob);
+      formData.append("audio", uploadBlob);
       formData.append("language", langToUse);
       formData.append("model", selectedModel);
       formData.append("compress", compress ? "true" : "false");
 
-      setProcessStage('uploading');
       const response = await fetch("/api/transcribe", { method: "POST", body: formData, signal: ac.signal });
 
       if (response.status === 404) { setError("هەڵەی 404: API نەدۆزرایەوە."); return; }
@@ -291,16 +534,55 @@ export default function App() {
       if (!reader) throw new Error("No reader");
       const decoder = new TextDecoder();
       let fullText = "";
+      let pending = "";
       while (true) {
         const { value, done } = await reader.read();
         if (value) {
-          const chunk = decoder.decode(value, { stream: !done });
-          if (chunk) { fullText += chunk; setTranscription(p => p + chunk); }
+          pending += decoder.decode(value, { stream: !done });
+
+          // Pull out any complete progress markers (in order) and update state,
+          // but hold back a trailing partial marker until more data arrives.
+          const combinedMarkerRe = new RegExp(`${CHUNK_PROGRESS_MARKER_RE.source}|${VERIFYING_SOURCES_MARKER_RE.source}|${WORDS_MARKER_RE.source}`, "g");
+          let match: RegExpExecArray | null;
+          let lastIndex = 0;
+          let visible = "";
+          while ((match = combinedMarkerRe.exec(pending))) {
+            visible += pending.slice(lastIndex, match.index);
+            if (match[1] !== undefined) {
+              setChunkProgress({ current: Number(match[1]), total: Number(match[2]) });
+            } else if (match[3] !== undefined) {
+              // Word-timestamp chunk arriving inline with the transcript — accumulate
+              // rather than replace, since long audio emits one of these per chunk.
+              try {
+                const newWords = JSON.parse(match[3]);
+                if (Array.isArray(newWords) && newWords.length > 0) {
+                  setTimedWords(prev => [...prev, ...newWords]);
+                }
+              } catch { /* malformed marker, ignore */ }
+            } else {
+              setIsVerifyingSources(true);
+            }
+            lastIndex = combinedMarkerRe.lastIndex;
+          }
+          const rest = pending.slice(lastIndex);
+          const partialMarkerStart = rest.indexOf(CHUNK_PROGRESS_NUL);
+          if (partialMarkerStart === -1 || done) {
+            visible += rest;
+            pending = "";
+          } else {
+            visible += rest.slice(0, partialMarkerStart);
+            pending = rest.slice(partialMarkerStart);
+          }
+
+          if (visible) { fullText += visible; setTranscription(p => p + visible); }
         }
         if (done) break;
       }
       setIsTranscribing(false);
       setProcessStage('idle');
+      setChunkProgress(null);
+      setIsVerifyingSources(false);
+
       if (fullText.trim()) {
         await saveToHistory({ text: fullText, language: langToUse, timestamp: Date.now(), model: selectedModel });
       }
@@ -309,6 +591,8 @@ export default function App() {
       setError(err.message || "پەیوەندی لەگەڵ سێرڤەر نییە.");
       setIsTranscribing(false);
       setProcessStage('idle');
+      setChunkProgress(null);
+      setIsVerifyingSources(false);
     }
   };
 
@@ -322,10 +606,106 @@ export default function App() {
     runTranscription(audioBlob, langToUse, shouldCompress);
   };
 
+  // Fetches per-word timestamps for the karaoke highlight view and subtitle export —
+  // only called on demand (toggle click / export), not automatically after every
+  // transcription. It's a second full audio-to-text request, and most transcriptions
+  // are never viewed in highlight mode or exported as subtitles, so eagerly firing it
+  // every time doubled audio-token cost for no benefit in the common case.
+  const ensureTimedWords = async (): Promise<TimedWord[]> => {
+    if (timedWords.length > 0) return timedWords;
+    if (!audioBlob) return [];
+    const ac = new AbortController();
+    timedAbortControllerRef.current = ac;
+    setIsTimedTranscribing(true);
+    try {
+      let uploadBlob: Blob = audioBlob;
+      if (shouldCompress || audioBlob.size > VERCEL_BODY_SIZE_LIMIT) {
+        try { uploadBlob = await compressAudioToMp3(audioBlob); } catch { uploadBlob = audioBlob; }
+      }
+      if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) return [];
+
+      const timedFormData = new FormData();
+      timedFormData.append("audio", uploadBlob);
+      timedFormData.append("language", targetLanguage);
+      timedFormData.append("model", selectedModel);
+      const r = await fetch("/api/transcribe-timed", { method: "POST", body: timedFormData, signal: ac.signal });
+      if (!r.ok) return [];
+      const words = await r.json();
+      if (Array.isArray(words) && words.length > 0) {
+        setTimedWords(words);
+        return words;
+      }
+      return [];
+    } catch {
+      return [];
+    } finally {
+      setIsTimedTranscribing(false);
+      timedAbortControllerRef.current = null;
+    }
+  };
+
+  const cancelTimedTranscription = () => {
+    timedAbortControllerRef.current?.abort();
+    timedAbortControllerRef.current = null;
+    setIsTimedTranscribing(false);
+  };
+
+  // Translates the already-transcribed Kurdish text to Arabic via a cheap text-only
+  // request instead of re-uploading and re-transcribing the audio — audio tokens cost
+  // far more than text tokens, and the Kurdish text is already known to be correct.
+  const translateExistingText = async () => {
+    if (!transcription.trim()) return;
+    setTargetLanguage('ar');
+    setIsTranscribing(true);
+    setError(null);
+    // Any previously-fetched karaoke timestamps belong to the Kurdish audio's words —
+    // leaving showTimedView on would keep rendering that stale Kurdish word list over
+    // the new Arabic text instead of showing the translation.
+    setTimedWords([]);
+    setShowTimedView(false);
+    setIsEditingTranscription(false);
+    const kurdishText = transcription;
+    setTranscription("");
+    try {
+      const response = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: stripCitationTags(kurdishText) }),
+      });
+      if (!response.ok) {
+        const txt = await response.text();
+        try { setError(JSON.parse(txt).error || "هەڵەیەک ڕوویدا."); }
+        catch { setError("هەڵەیەک ڕوویدا لە کاتی وەرگێڕانەکە."); }
+        setTranscription(kurdishText);
+        return;
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No reader");
+      const decoder = new TextDecoder();
+      let fullText = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (value) {
+          const chunk = decoder.decode(value, { stream: !done });
+          if (chunk) { fullText += chunk; setTranscription(p => p + chunk); }
+        }
+        if (done) break;
+      }
+      if (fullText.trim()) {
+        await saveToHistory({ text: fullText, language: 'ar', timestamp: Date.now(), model: selectedModel });
+      }
+    } catch {
+      setError("پەیوەندی لەگەڵ سێرڤەر نییە.");
+      setTranscription(kurdishText);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
   const copyText = (text: string, id: string | null = null) => {
     // Normalize whitespace: collapse multiple spaces/newlines into single space per word,
     // then wrap at ~80 chars per line for clean paste output
-    const normalized = text
+    const normalized = stripCitationTags(text)
       .replace(/\r\n/g, '\n')
       .replace(/[ \t]+/g, ' ')
       .trim();
@@ -380,8 +760,57 @@ export default function App() {
     }
   };
 
-  const exportText = (format: 'txt' | 'docx' | 'pdf', text: string) => {
+  const searchHadith = async () => {
+    if (!hadithQuery.trim()) return;
+    setIsSearchingHadith(true);
+    setHadithSearchError(null);
+    setHadithResults([]);
+    try {
+      const res = await fetch('/api/hadith-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: hadithQuery }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setHadithSearchError(data.error || 'هەڵەیەک ڕوویدا.');
+        return;
+      }
+      setHadithResults(Array.isArray(data.results) ? data.results : []);
+    } catch {
+      setHadithSearchError('پەیوەندی لەگەڵ سێرڤەر نییە.');
+    } finally {
+      setIsSearchingHadith(false);
+    }
+  };
+
+  const correctGrammar = async () => {
+    if (!grammarInput.trim()) return;
+    setIsCorrectingGrammar(true);
+    setGrammarError(null);
+    setGrammarResult(null);
+    try {
+      const res = await fetch('/api/grammar-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: grammarInput }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setGrammarError(data.error || 'هەڵەیەک ڕوویدا.');
+        return;
+      }
+      setGrammarResult(data);
+    } catch {
+      setGrammarError('پەیوەندی لەگەڵ سێرڤەر نییە.');
+    } finally {
+      setIsCorrectingGrammar(false);
+    }
+  };
+
+  const exportText = (format: 'txt' | 'docx' | 'pdf', rawText: string) => {
     const filename = `voxscript-${Date.now()}`;
+    const text = stripCitationTags(rawText);
     const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
     const htmlDoc = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Kurdish Transcription</title><style>body{font-family:"Arial","Tahoma",sans-serif;font-size:16pt;line-height:2;direction:rtl;text-align:right;padding:2cm;color:#000;}</style></head><body>${escaped}</body></html>`;
 
@@ -415,18 +844,39 @@ export default function App() {
     setIsExportingSubtitles(true);
     setShowExportMenu(false);
     try {
-      const formData = new FormData();
-      formData.append("audio", audioBlob);
-      formData.append("language", targetLanguage);
-      formData.append("format", format);
-      formData.append("compress", shouldCompress ? "true" : "false");
-      const res = await fetch("/api/subtitles", { method: "POST", body: formData });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "هەڵەیەک ڕوویدا" }));
-        setError(err.error || "هەڵەیەک ڕوویدا لە دروستکردنی ژێرنووس.");
-        return;
+      // Build cues from word timestamps we already have (or lazily fetch once) —
+      // avoids a dedicated Gemini Pro audio call to re-derive timing we can compute
+      // locally for free.
+      const words = await ensureTimedWords();
+      let text: string;
+      if (words.length > 0) {
+        const cues = buildSubtitleCues(words);
+        text = format === 'srt' ? buildSRT(cues) : buildVTT(cues);
+      } else {
+        // Fallback only: word timestamps unavailable (e.g. the lazy fetch failed) —
+        // ask Gemini directly for a subtitle file from the audio.
+        let uploadBlob: Blob = audioBlob;
+        if (shouldCompress || audioBlob.size > VERCEL_BODY_SIZE_LIMIT) {
+          try { uploadBlob = await compressAudioToMp3(audioBlob); } catch { uploadBlob = audioBlob; }
+        }
+        if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) {
+          setError("دەنگەکە تەنانەت دوای بچووککردنەوەش زۆر گەورەیە. تکایە کورتکراوەیەکی کەمتری دەنگەکە باربکە.");
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("audio", uploadBlob);
+        formData.append("language", targetLanguage);
+        formData.append("format", format);
+        formData.append("compress", shouldCompress ? "true" : "false");
+        const res = await fetch("/api/subtitles", { method: "POST", body: formData });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: "هەڵەیەک ڕوویدا" }));
+          setError(err.error || "هەڵەیەک ڕوویدا لە دروستکردنی ژێرنووس.");
+          return;
+        }
+        text = await res.text();
       }
-      const text = await res.text();
       const mimeType = format === 'srt' ? 'text/srt;charset=utf-8' : 'text/vtt;charset=utf-8';
       const blob = new Blob([text], { type: mimeType });
       const url = URL.createObjectURL(blob);
@@ -443,7 +893,7 @@ export default function App() {
 
   const shareText = (platform: 'telegram' | 'whatsapp' | 'native', text: string) => {
     // Telegram & WhatsApp have message length limits — trim gracefully
-    const trimmed = text.slice(0, 3900);
+    const trimmed = stripCitationTags(text).slice(0, 3900);
     const encoded = encodeURIComponent(trimmed);
     if (platform === 'telegram') {
       // Use tg:// deep-link: no url param needed, just msg
@@ -466,6 +916,7 @@ export default function App() {
     setSummary(''); setShowSummary(false);
     setAudioDuration(0);
     setSliderMin(0); setSliderMax(100); setCurrentPct(0); setIsPlaying(false);
+    setTimedWords([]); setShowTimedView(false);
   };
 
   const fmtMMSS = (sec: number): string => {
@@ -563,12 +1014,12 @@ export default function App() {
 
           {/* Desktop Nav */}
           <nav className="hidden sm:flex gap-1" dir="ltr">
-            {(['transcribe', 'library', 'profile'] as const).map(tab => (
+            {(['transcribe', 'library', 'hadith-search', 'arabic-grammar', 'profile'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`relative px-4 py-2 text-sm font-medium transition-all rounded-lg ${activeTab === tab ? 'text-[#ff4e00]' : 'hover:bg-[#ff4e00]/05'}`}
                 style={activeTab !== tab ? { color: 'var(--text-muted)' } : undefined}
               >
-                {tab === 'transcribe' ? 'نووسینەوە' : tab === 'library' ? 'کتێبخانە' : 'پرۆفایل'}
+                {tab === 'transcribe' ? 'نووسینەوە' : tab === 'library' ? 'کتێبخانە' : tab === 'hadith-search' ? 'گەڕانی فەرموودە' : tab === 'arabic-grammar' ? 'ڕاستکردنەوەی عەرەبی' : 'پرۆفایل'}
                 {tab === 'library' && history.length > 0 && (
                   <span className="mr-1.5 text-[9px] px-1.5 py-0.5 rounded-full bg-[#ff4e00] text-white">{history.length}</span>
                 )}
@@ -616,7 +1067,7 @@ export default function App() {
                     <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
                       <p className="text-[10px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>بەشەکان</p>
                       <div className="flex gap-1">
-                        {([['transcribe', Mic, 'نووسینەوە'], ['library', History, 'کتێبخانە'], ['profile', User, 'پرۆفایل']] as const).map(([tab, Icon, label]) => (
+                        {([['transcribe', Mic, 'نووسینەوە'], ['library', History, 'کتێبخانە'], ['hadith-search', Search, 'گەڕانی فەرموودە'], ['arabic-grammar', SpellCheck, 'ڕاستکردنەوەی عەرەبی'], ['profile', User, 'پرۆفایل']] as const).map(([tab, Icon, label]) => (
                           <button key={tab} onClick={() => { setActiveTab(tab as any); setShowUserMenu(false); }}
                             className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:bg-[#ff4e00]/10'}`}
                             style={activeTab !== tab ? { color: 'var(--text-muted)', border: '1px solid var(--border)' } : {}}
@@ -745,6 +1196,8 @@ export default function App() {
         {([
           ['transcribe', Mic, 'نووسینەوە'],
           ['library', History, 'کتێبخانە'],
+          ['hadith-search', Search, 'گەڕان'],
+          ['arabic-grammar', SpellCheck, 'ڕاستکردنەوە'],
           ['profile', User, 'پرۆفایل'],
         ] as const).map(([tab, Icon, label]) => (
           <button key={tab} onClick={() => setActiveTab(tab as any)}
@@ -790,7 +1243,7 @@ export default function App() {
                       className="w-full text-sm font-medium py-2.5 pl-3 pr-8 rounded-lg outline-none cursor-pointer appearance-none"
                       style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }} dir="ltr"
                     >
-                      <option value="gemini-pro" className="bg-card">Gemini 2.5 Pro ★</option>
+                      <option value="gemini-pro" className="bg-card">Gemini 2.5 Pro ★ (Smart)</option>
                       <option value="gemini" className="bg-card">Gemini 2.5 Flash</option>
                       <option value="gemini-flash2" className="bg-card">Gemini 2.0 Flash</option>
                       <option value="scribe" className="bg-card">ElevenLabs Scribe</option>
@@ -963,6 +1416,15 @@ export default function App() {
                             </button>
                           </div>
 
+                          {/* ── Playback speed ── */}
+                          <div className="flex items-center justify-center gap-1">
+                            {[0.5, 0.75, 1, 1.25, 1.5, 2].map(rate => (
+                              <button key={rate} onClick={() => setPlaybackRate(rate)}
+                                className={`px-2 py-1 rounded-md text-[10px] font-mono font-bold transition-colors ${playbackRate === rate ? 'bg-[#3b82f6] text-white' : 'text-[#777] hover:text-white hover:bg-[#ffffff10]'}`}
+                              >{rate}x</button>
+                            ))}
+                          </div>
+
                           {/* ── Transcribe / Translate selected range ── */}
                           {audioDuration > 0 && sliderMax > sliderMin && (
                             <div className="flex gap-2 pt-1" dir="rtl">
@@ -989,11 +1451,19 @@ export default function App() {
                           >
                             <div className="flex items-center justify-between" dir="ltr">
                               <div className="flex items-center gap-2">
-                                <Loader2 size={13} className="animate-spin text-[#ff4e00]" />
+                                {isVerifyingSources
+                                  ? <Search size={13} className="animate-pulse text-green-500" />
+                                  : <Loader2 size={13} className="animate-spin text-[#ff4e00]" />}
                                 <span className="text-[10px] font-mono text-[#aaa] uppercase tracking-wider">
                                   {processStage === 'compressing' && 'فشردن و ئامادەکردن...'}
                                   {processStage === 'uploading' && 'ناردن بۆ سێرڤەر...'}
-                                  {processStage === 'transcribing' && 'گۆڕینی دەنگ بە نووسین...'}
+                                  {processStage === 'transcribing' && (
+                                    isVerifyingSources
+                                      ? 'دەرهێنانی سەرچاوەکانی ئایەت و فەرموودە...'
+                                      : chunkProgress
+                                      ? `خەریکی وەرگێڕانی پارچەی ${chunkProgress.current} لە ${chunkProgress.total}...`
+                                      : 'گۆڕینی دەنگ بە نووسین...'
+                                  )}
                                 </span>
                               </div>
                               <button onClick={cancelTranscription}
@@ -1003,8 +1473,12 @@ export default function App() {
                               </button>
                             </div>
                             <div className="h-0.5 bg-[#1a1a1a] rounded-full overflow-hidden">
-                              <motion.div className="h-full rounded-full bg-[#ff4e00]"
-                                animate={processStage === 'transcribing'
+                              <motion.div className={`h-full rounded-full ${isVerifyingSources ? 'bg-green-500' : 'bg-[#ff4e00]'}`}
+                                animate={isVerifyingSources
+                                  ? { width: ['10%', '60%', '10%'], transition: { duration: 1.6, repeat: Infinity, ease: 'easeInOut' } }
+                                  : chunkProgress
+                                  ? { width: `${Math.min(100, (chunkProgress.current / chunkProgress.total) * 100)}%`, transition: { duration: 0.4 } }
+                                  : processStage === 'transcribing'
                                   ? { width: ['15%', '88%'], transition: { duration: 28, ease: 'linear' } }
                                   : processStage === 'uploading'
                                   ? { width: '15%', transition: { duration: 0.4 } }
@@ -1062,7 +1536,7 @@ export default function App() {
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       {targetLanguage === 'ku' && audioBlob && !isTranscribing && (
-                        <button onClick={() => transcribeAudio('ar')}
+                        <button onClick={() => transcription.trim() ? translateExistingText() : transcribeAudio('ar')}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-[#ff4e00]/10 border border-[#ff4e00]/25 rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#ff4e00]/20 text-[#ff4e00] transition-colors font-bold"
                         >وەرگێڕان بۆ عەرەبی</button>
                       )}
@@ -1163,8 +1637,63 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                  {/* Karaoke toggle — fetches word timestamps on demand, not automatically */}
+                  <div className="px-5 sm:px-7 pt-4 flex items-center gap-2" dir="ltr">
+                    {!isTranscribing && transcription.trim() && (
+                      <>
+                        <button
+                          onClick={() => setShowTimedView(false)}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${!showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
+                          style={showTimedView ? { color: 'var(--text-muted)' } : undefined}
+                        >تێکستی ئاسایی</button>
+                        {isTimedTranscribing ? (
+                          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold border border-[#ffffff10]" style={{ color: 'var(--text-muted)' }}>
+                            <Loader2 size={11} className="animate-spin" />هایلایت ئامادەدەبێت...
+                            <button onClick={cancelTimedTranscription}
+                              className="text-[#555] hover:text-[#ff4e00] transition-colors mr-1"
+                            ><X size={12} /></button>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={async () => {
+                              const words = await ensureTimedWords();
+                              if (words.length > 0) setShowTimedView(true);
+                            }}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
+                            style={showTimedView ? undefined : { color: 'var(--text-muted)' }}
+                          >🎵 هایلایتی دەنگ</button>
+                        )}
+                      </>
+                    )}
+                  </div>
+
                   <div className="px-5 sm:px-7 py-6 min-h-[120px]">
-                    {isEditingTranscription ? (
+                    {showTimedView && timedWords.length > 0 ? (
+                      <div className="text-xl sm:text-2xl md:text-3xl leading-[2.6] text-right" dir="rtl">
+                        {timedWords.map((w, i) => {
+                          const t = audioDuration > 0 ? (currentPct / 100) * audioDuration : -1;
+                          const active = t >= w.start && t < w.end;
+                          const past = t >= w.end;
+                          return (
+                            <span
+                              key={i}
+                              onClick={() => {
+                                const el = audioElRef.current;
+                                if (el) el.currentTime = w.start;
+                              }}
+                              className="cursor-pointer inline-block transition-all duration-150 rounded mx-[1px]"
+                              style={
+                                active
+                                  ? { background: '#ff4e00', color: '#fff', padding: '0 5px', borderRadius: '5px', transform: 'scale(1.06)' }
+                                  : past
+                                  ? { color: 'var(--text-muted)', padding: '0 2px' }
+                                  : { color: 'var(--text-primary)', padding: '0 2px' }
+                              }
+                            >{w.word}</span>
+                          );
+                        })}
+                      </div>
+                    ) : isEditingTranscription ? (
                       <textarea
                         ref={editableRef}
                         value={transcription}
@@ -1178,7 +1707,7 @@ export default function App() {
                       <p className="text-xl sm:text-2xl md:text-3xl leading-relaxed whitespace-pre-wrap cursor-text" style={{ color: 'var(--text-primary)' }}
                         onClick={() => { setIsEditingTranscription(true); setTimeout(() => editableRef.current?.focus(), 50); }}
                         title="کلیک بکە بۆ دەستکاریکردن"
-                      >{transcription}</p>
+                      ><TranscriptionWithCitations text={transcription} /></p>
                     )}
                   </div>
                   {/* Summary panel */}
@@ -1353,6 +1882,205 @@ export default function App() {
                 <p className="text-[#444] text-sm">هیچ تۆمارێک بوونی نییە</p>
               </div>
             )}
+          </motion.section>
+        ) : activeTab === 'hadith-search' ? (
+          /* ── HADITH SEARCH ── */
+          <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="rounded-2xl shadow-2xl overflow-hidden"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+          >
+            <div className="flex items-center gap-2 px-5 sm:px-7 py-4" style={{ borderBottom: '1px solid var(--border-soft)' }}>
+              <Search size={15} style={{ color: 'var(--text-dim)' }} />
+              <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>گەڕانی واتایی بۆ فەرموودەکان</span>
+            </div>
+
+            <div className="px-5 sm:px-7 py-5 space-y-3">
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                واتا یان وەسفی فەرموودەکە بە کوردی بنووسە، سیستەمەکە دەقی عەرەبی ڕەسەنی فەرموودەکە لەگەڵ ناوی ڕاوی و سەرچاوەکەی بۆ دەدۆزێتەوە.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <textarea
+                  value={hadithQuery}
+                  onChange={e => setHadithQuery(e.target.value)}
+                  placeholder="بۆ نموونە: ئەو فەرموودەیە کە باسی نیەت دەکات..."
+                  dir="rtl"
+                  rows={2}
+                  className="flex-1 rounded-xl px-4 py-3 text-sm outline-none transition-colors resize-none"
+                  style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); searchHadith(); } }}
+                />
+                <button onClick={searchHadith} disabled={isSearchingHadith || !hadithQuery.trim()}
+                  className="px-5 py-3 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.08em] shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shrink-0"
+                >
+                  {isSearchingHadith ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                  گەڕان
+                </button>
+              </div>
+
+              {hadithSearchError && (
+                <p className="text-xs text-red-500">{hadithSearchError}</p>
+              )}
+
+              {hadithResults.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  {hadithResults.map((result, i) => {
+                    const copyId = `hadith-${i}`;
+                    const fullCitation = `﴿${result.arabicText}﴾ [رواه ${result.narrator}، ${result.book}${result.chapter ? `، ${result.chapter}` : ''}]`;
+                    return (
+                      <div key={i} className="rounded-xl overflow-hidden" dir="rtl"
+                        style={{ background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.2)' }}
+                      >
+                        {/* Status bar */}
+                        <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid rgba(168,85,247,0.15)' }}>
+                          {result.verified
+                            ? <span className="text-[10px] uppercase tracking-wider font-bold text-green-500">✓ پشتڕاستکراوە</span>
+                            : <span className="text-[10px] uppercase tracking-wider font-bold text-amber-500">دڵنیا نییت — پشتڕاستی نەکراوەتەوە</span>}
+                          <button onClick={() => copyText(fullCitation, copyId)}
+                            title="کۆپیکردنی فەرموودەکە"
+                            className="shrink-0 p-1.5 rounded-lg bg-card border border-[#ffffff10] hover:bg-[#222] transition-colors"
+                          >
+                            {copiedId === copyId ? <Check size={13} className="text-green-400" /> : <Copy size={13} style={{ color: 'var(--text-muted)' }} />}
+                          </button>
+                        </div>
+
+                        {/* 1. Arabic text */}
+                        <div className="px-4 py-3" style={{ borderBottom: '1px solid rgba(168,85,247,0.15)' }}>
+                          <p className="text-[9px] uppercase tracking-widest font-bold mb-1.5" style={{ color: 'var(--text-faint)' }}>دەقی فەرموودەکە</p>
+                          <p className="font-semibold text-lg leading-loose" style={{ fontFamily: "'Amiri Quran', 'Traditional Arabic', 'Scheherazade New', serif" }}>
+                            ﴿{result.arabicText}﴾
+                          </p>
+                        </div>
+
+                        {/* 2. Narrator */}
+                        <div className="px-4 py-3" style={{ borderBottom: '1px solid rgba(168,85,247,0.15)' }}>
+                          <p className="text-[9px] uppercase tracking-widest font-bold mb-1.5" style={{ color: 'var(--text-faint)' }}>ڕاوی (گێڕەڕەوە)</p>
+                          <p className="text-sm" style={{ color: 'var(--text-primary)' }}>{result.narrator}</p>
+                        </div>
+
+                        {/* 3. Source */}
+                        <div className="px-4 py-3">
+                          <p className="text-[9px] uppercase tracking-widest font-bold mb-1.5" style={{ color: 'var(--text-faint)' }}>سەرچاوە</p>
+                          <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                            {result.book}
+                            {result.chapter && ` — ${result.chapter}`}
+                            {result.grading && ` (${result.grading})`}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!isSearchingHadith && !hadithSearchError && hadithResults.length === 0 && hadithQuery.trim() === '' && (
+                <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
+                  <Search size={32} className="text-[#ffffff08] mb-3" />
+                  <p className="text-[#444] text-sm">وەسفی فەرموودەکە بنووسە بۆ دەستپێکردنی گەڕان</p>
+                </div>
+              )}
+            </div>
+          </motion.section>
+        ) : activeTab === 'arabic-grammar' ? (
+          /* ── ARABIC GRAMMAR CORRECTOR ── */
+          <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="rounded-2xl shadow-2xl overflow-hidden"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+          >
+            <div className="flex items-center gap-2 px-5 sm:px-7 py-4" style={{ borderBottom: '1px solid var(--border-soft)' }}>
+              <SpellCheck size={15} style={{ color: 'var(--text-dim)' }} />
+              <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>ڕاستکردنەوەی ڕێزمانی عەرەبی</span>
+            </div>
+
+            <div className="px-5 sm:px-7 py-5 space-y-3">
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                دەقی عەرەبی بنووسە، سیستەمەکە هەڵەکانی ڕێنووس، نحو، و صرف ڕاستدەکاتەوە بەبێ ئەوەی هیچ وشەیەک زیاد یان کەم بکات یان مانا بگۆڕێت.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[9px] uppercase tracking-widest font-bold mb-1.5" style={{ color: 'var(--text-faint)' }}>دەقی سەرەتایی</p>
+                  <textarea
+                    value={grammarInput}
+                    onChange={e => setGrammarInput(e.target.value)}
+                    placeholder="دەقی عەرەبی لێرە بنووسە..."
+                    dir="rtl"
+                    rows={8}
+                    className="w-full rounded-xl px-4 py-3 text-base leading-relaxed outline-none transition-colors resize-none"
+                    style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)', fontFamily: "'Amiri Quran', 'Traditional Arabic', serif" }}
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-[9px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-faint)' }}>دەقی ڕاستکراوە</p>
+                    {grammarResult && (
+                      <button onClick={() => copyText(grammarResult.correctedText, 'grammar-corrected')}
+                        title="کۆپیکردنی دەقی ڕاستکراوە"
+                        className="shrink-0 p-1 rounded-md bg-card border border-[#ffffff10] hover:bg-[#222] transition-colors"
+                      >
+                        {copiedId === 'grammar-corrected' ? <Check size={12} className="text-green-400" /> : <Copy size={12} style={{ color: 'var(--text-muted)' }} />}
+                      </button>
+                    )}
+                  </div>
+                  <div dir="rtl"
+                    className="w-full rounded-xl px-4 py-3 text-base leading-relaxed overflow-auto select-text"
+                    style={{ minHeight: 'calc(8 * 1.625em + 1.5rem)', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: 'var(--text-primary)', fontFamily: "'Amiri Quran', 'Traditional Arabic', serif" }}
+                  >
+                    {grammarResult ? (
+                      buildGrammarDiffSegments(grammarResult.correctedText, grammarResult.errors).map((seg, i) =>
+                        seg.changed
+                          ? <span key={i} className="text-green-500 font-semibold bg-green-500/10 rounded px-0.5">{seg.text}</span>
+                          : <span key={i}>{seg.text}</span>
+                      )
+                    ) : (
+                      <span style={{ color: 'var(--text-faint)' }}>دەقی ڕاستکراوە لێرە دەردەکەوێت...</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <button onClick={correctGrammar} disabled={isCorrectingGrammar || !grammarInput.trim()}
+                className="w-full py-3 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.08em] shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isCorrectingGrammar ? <Loader2 size={14} className="animate-spin" /> : <SpellCheck size={14} />}
+                ڕاستکردنەوە
+              </button>
+
+              {grammarError && (
+                <p className="text-xs text-red-500">{grammarError}</p>
+              )}
+
+              {grammarResult && (
+                <div className="space-y-3 pt-2">
+                  {/* Error report */}
+                  {grammarResult.errors.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-[9px] uppercase tracking-widest font-bold px-1" style={{ color: 'var(--text-faint)' }}>
+                        ڕاپۆرتی هەڵەکان ({grammarResult.errors.length})
+                      </p>
+                      {grammarResult.errors.map((err, i) => (
+                        <div key={i} className="rounded-xl px-4 py-3" dir="rtl" style={{ background: 'rgba(255,78,0,0.05)', border: '1px solid rgba(255,78,0,0.18)' }}>
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="text-[9px] px-2 py-0.5 rounded-full bg-[#ff4e00]/15 text-[#ff4e00] font-bold uppercase tracking-wider">{err.type}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-base mb-1.5" style={{ fontFamily: "'Amiri Quran', 'Traditional Arabic', serif" }}>
+                            <span className="text-red-400 line-through">{err.original}</span>
+                            <span style={{ color: 'var(--text-faint)' }}>←</span>
+                            <span className="text-green-500 font-semibold">{err.corrected}</span>
+                          </div>
+                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>{err.explanation}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }} dir="rtl">
+                      <Check size={16} className="text-green-500 shrink-0" />
+                      <p className="text-sm" style={{ color: 'var(--text-primary)' }}>هیچ هەڵەیەک نەدۆزرایەوە — دەقەکە ڕێزمانی بێخەوشە.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+            </div>
           </motion.section>
         ) : activeTab === 'profile' ? (
           <ProfilePage user={user} />
