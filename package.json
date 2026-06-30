@@ -11,6 +11,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@breezystack/lamejs": "^1.2.7",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",

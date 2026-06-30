@@ -12,6 +12,13 @@ import { auth, db } from "./firebase";
 import AuthPage from "./AuthPage";
 import ProfilePage from "./ProfilePage";
 import { useTheme } from "./useTheme";
+import { compressAudioToMp3 } from "./audioCompress";
+
+// Vercel serverless functions reject any request body over 4.5MB (hard platform
+// limit, not configurable). Audio above this raw size must be compressed client-side
+// before upload regardless of the user's compression preference, or the upload will
+// always fail with a 413 — this is a correctness floor, not a quality choice.
+const VERCEL_BODY_SIZE_LIMIT = 4.5 * 1024 * 1024;
 
 type HistoryItem = {
   id: string;
@@ -385,16 +392,33 @@ export default function App() {
     setIsVerifyingSources(false);
 
     try {
-      setProcessStage(compress ? 'compressing' : 'uploading');
+      const needsCompression = compress || blob.size > VERCEL_BODY_SIZE_LIMIT;
+      let uploadBlob = blob;
+      if (needsCompression) {
+        setProcessStage('compressing');
+        try {
+          uploadBlob = await compressAudioToMp3(blob);
+        } catch {
+          // Decoding/encoding failed — fall back to the original blob. If it's over
+          // the limit the upload will fail with a clear 413 below rather than silently.
+          uploadBlob = blob;
+        }
+      }
+      if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) {
+        setError("دەنگەکە تەنانەت دوای بچووککردنەوەش زۆر گەورەیە. تکایە کورتکراوەیەکی کەمتری دەنگەکە باربکە.");
+        return;
+      }
+
+      setProcessStage('uploading');
       const formData = new FormData();
-      formData.append("audio", blob);
+      formData.append("audio", uploadBlob);
       formData.append("language", langToUse);
       formData.append("model", selectedModel);
       formData.append("compress", compress ? "true" : "false");
 
       // Always fetch word timestamps in background for karaoke highlight
       const timedFormData = new FormData();
-      timedFormData.append("audio", blob);
+      timedFormData.append("audio", uploadBlob);
       timedFormData.append("language", langToUse);
       timedFormData.append("model", selectedModel);
       setIsTimedTranscribing(true);
@@ -639,8 +663,17 @@ export default function App() {
     setIsExportingSubtitles(true);
     setShowExportMenu(false);
     try {
+      let uploadBlob: Blob = audioBlob;
+      if (shouldCompress || audioBlob.size > VERCEL_BODY_SIZE_LIMIT) {
+        try { uploadBlob = await compressAudioToMp3(audioBlob); } catch { uploadBlob = audioBlob; }
+      }
+      if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) {
+        setError("دەنگەکە تەنانەت دوای بچووککردنەوەش زۆر گەورەیە. تکایە کورتکراوەیەکی کەمتری دەنگەکە باربکە.");
+        return;
+      }
+
       const formData = new FormData();
-      formData.append("audio", audioBlob);
+      formData.append("audio", uploadBlob);
       formData.append("language", targetLanguage);
       formData.append("format", format);
       formData.append("compress", shouldCompress ? "true" : "false");
