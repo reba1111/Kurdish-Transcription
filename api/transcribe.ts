@@ -334,17 +334,18 @@ Strict rules — follow every one without exception:
       }
 
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Transfer-Encoding", "chunked");
+
       if (/<quran |<hadith /.test(taggedText)) {
-        res.setHeader("Transfer-Encoding", "chunked");
         res.write(formatVerifyingSourcesMarker());
       }
       const annotated = await verifyAndAnnotate(taggedText, ai);
       if (words.length > 0) {
-        res.setHeader("Transfer-Encoding", "chunked");
         const originalTimeWords = speechSegments ? remapWordsToOriginalTime(words, speechSegments) : words;
         res.write(formatWordsMarker(originalTimeWords));
       }
-      res.end(annotated);
+      res.write(annotated);
+      res.end();
       return;
     }
 

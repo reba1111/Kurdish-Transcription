@@ -35,8 +35,6 @@ const CHUNK_PROGRESS_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "CHUNK_PROGRESS
 // Marks the moment the server starts verifying a detected Quran ayah or Hadith
 // (AlQuran Cloud lookup / Google Search Grounding), which adds noticeable latency.
 const VERIFYING_SOURCES_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "VERIFYING_SOURCES" + CHUNK_PROGRESS_NUL, "g");
-// Matches the WORDS:... marker the server embeds — stripped so it never appears in the visible transcript.
-const WORDS_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "WORDS:([\\s\\S]*?)" + CHUNK_PROGRESS_NUL, "g");
 
 // Matches <quran surah="..." ayah="..." verified="true|false">text</quran> and
 // <hadith narrator="..." verified="true|false">text</hadith> tags the server may embed
@@ -481,42 +479,56 @@ export default function App() {
       let fullText = "";
       let pending = "";
       let streamedWords: { word: string; start: number; end: number }[] = [];
+
+      // Extracts all complete NUL-delimited markers from `pending`, calls the handler
+      // for each, and returns the leftover text with markers removed. Keeps any
+      // trailing incomplete marker buffered for the next chunk.
+      const processMarkers = (buf: string, isDone: boolean): string => {
+        let out = "";
+        let i = 0;
+        while (i < buf.length) {
+          const nulPos = buf.indexOf(CHUNK_PROGRESS_NUL, i);
+          if (nulPos === -1) { out += buf.slice(i); break; }
+
+          // Text before this NUL is visible transcript
+          out += buf.slice(i, nulPos);
+
+          // Find closing NUL
+          const closePos = buf.indexOf(CHUNK_PROGRESS_NUL, nulPos + 1);
+          if (closePos === -1) {
+            // Incomplete marker — keep from nulPos for next chunk (unless done)
+            if (isDone) { /* discard partial */ } else { pending = buf.slice(nulPos); }
+            return out;
+          }
+
+          const inner = buf.slice(nulPos + 1, closePos);
+          if (inner.startsWith("CHUNK_PROGRESS:")) {
+            const parts = inner.slice("CHUNK_PROGRESS:".length).split("/");
+            if (parts.length === 2) setChunkProgress({ current: Number(parts[0]), total: Number(parts[1]) });
+          } else if (inner === "VERIFYING_SOURCES") {
+            setIsVerifyingSources(true);
+          } else if (inner.startsWith("WORDS:")) {
+            try {
+              const chunk = JSON.parse(inner.slice("WORDS:".length));
+              if (Array.isArray(chunk) && chunk.length > 0) {
+                streamedWords = [...streamedWords, ...chunk];
+                setTimedWords(prev => [...prev, ...chunk]);
+              }
+            } catch { /* malformed, ignore */ }
+          }
+          i = closePos + 1;
+        }
+        pending = "";
+        return out;
+      };
+
       while (true) {
         const { value, done } = await reader.read();
         if (value) {
-          pending += decoder.decode(value, { stream: !done });
-
-          const combinedMarkerRe = new RegExp(`${CHUNK_PROGRESS_MARKER_RE.source}|${VERIFYING_SOURCES_MARKER_RE.source}|${WORDS_MARKER_RE.source}`, "g");
-          let match: RegExpExecArray | null;
-          let lastIndex = 0;
-          let visible = "";
-          while ((match = combinedMarkerRe.exec(pending))) {
-            visible += pending.slice(lastIndex, match.index);
-            if (match[1] !== undefined) {
-              setChunkProgress({ current: Number(match[1]), total: Number(match[2]) });
-            } else if (match[3] !== undefined) {
-              try {
-                const chunk = JSON.parse(match[3]);
-                if (Array.isArray(chunk) && chunk.length > 0) {
-                  streamedWords = [...streamedWords, ...chunk];
-                  setTimedWords(prev => [...prev, ...chunk]);
-                }
-              } catch { /* malformed, ignore */ }
-            } else {
-              setIsVerifyingSources(true);
-            }
-            lastIndex = combinedMarkerRe.lastIndex;
-          }
-          const rest = pending.slice(lastIndex);
-          const partialMarkerStart = rest.indexOf(CHUNK_PROGRESS_NUL);
-          if (partialMarkerStart === -1 || done) {
-            visible += rest;
-            pending = "";
-          } else {
-            visible += rest.slice(0, partialMarkerStart);
-            pending = rest.slice(partialMarkerStart);
-          }
-
+          const chunk = decoder.decode(value, { stream: !done });
+          const buf = pending + chunk;
+          pending = "";
+          const visible = processMarkers(buf, done);
           if (visible) { fullText += visible; setTranscription(p => p + visible); }
         }
         if (done) break;
