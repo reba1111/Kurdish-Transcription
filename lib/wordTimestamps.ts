@@ -29,9 +29,8 @@ const SORANI_SPELLING_RULES = `Strict rules — follow every one without excepti
 4. Do NOT translate, summarize, or paraphrase — only transcribe.
 5. If the speaker recites a Quran ayah or Hadith, transcribe those words too, exactly as recited in Arabic script — citation detection happens separately afterward, so just give accurate words and timestamps here.`;
 
-/** Prompt for the Kurdish word-timestamp transcription pass. Replaces the old plain-
- * prose prompt for the main transcription call, since the reconstructed text (via
- * wordsToText) is used as the transcript everywhere a plain string is needed. */
+/** Prompt used for chunked (long) audio — line-delimited so a truncated response
+ * still yields every word transcribed before the cutoff. */
 export const WORD_TIMESTAMP_PROMPT = `You are an expert Kurdish (Sorani) speech transcriber. Transcribe the spoken audio word by word, with an accurate start/end timestamp (in seconds) for every word.
 
 ${SORANI_SPELLING_RULES}
@@ -47,6 +46,48 @@ Example:
 0.85|1.40|باشیت
 
 Return ONLY these lines — no markdown, no headers, no explanations, no blank lines, no commentary.`;
+
+/** Prompt used for single-shot (short) audio with responseSchema — JSON output is
+ * enforced by the schema so the model cannot deviate from the expected format. */
+export const WORD_TIMESTAMP_PROMPT_JSON = `You are an expert Kurdish (Sorani) speech transcriber. Transcribe every spoken word with its precise start and end time in seconds.
+
+${SORANI_SPELLING_RULES}
+6. Punctuation marks (. ، ؟ !) should be merged onto the preceding word — do NOT emit them as separate entries.
+
+Return a JSON array where every element has exactly three fields: "word" (string), "start" (number, seconds), "end" (number, seconds). Do not include any other fields or text.`;
+
+/** JSON responseSchema for structured output — enforces { word, start, end }[] */
+export const WORD_TIMESTAMP_SCHEMA = {
+  type: "array" as const,
+  items: {
+    type: "object" as const,
+    properties: {
+      word:  { type: "string"  as const },
+      start: { type: "number" as const },
+      end:   { type: "number" as const },
+    },
+    required: ["word", "start", "end"],
+  },
+};
+
+/** Parses a JSON array response from structured output into TimedWord[]. */
+export function parseWordTimestampJSON(raw: string): TimedWord[] {
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    const words: TimedWord[] = [];
+    for (const item of arr) {
+      const word  = String(item.word ?? "").trim();
+      const start = Number(item.start);
+      const end   = Number(item.end);
+      if (!word || !Number.isFinite(start) || !Number.isFinite(end)) continue;
+      words.push({ word, start, end });
+    }
+    return words;
+  } catch {
+    return [];
+  }
+}
 
 const LINE_RE = /^(\d+(?:\.\d+)?)\|(\d+(?:\.\d+)?)\|(.+)$/;
 

@@ -7,7 +7,7 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, trimSilence } from "../lib/audioChunker";
 import { transcribeLongAudio } from "../lib/chunkedTranscription";
 import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "../lib/islamicTextVerifier";
-import { looksLikeValidWordList, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "../lib/wordTimestamps";
+import { looksLikeValidWordList, parseWordTimestampJSON, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, WORD_TIMESTAMP_PROMPT_JSON, WORD_TIMESTAMP_SCHEMA, wordsToText, type TimedWord } from "../lib/wordTimestamps";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -241,31 +241,49 @@ Strict rules — follow every one without exception:
     let lastError: any = null;
 
     if (targetLanguage === "ku") {
-      // Single audio call returns word+timestamp lines, which double as both the
-      // transcript (joined into prose) and the karaoke/subtitle word list — instead
-      // of a separate /api/transcribe-timed audio call that doubled the cost of every
-      // transcription. Citation tagging happens in a cheap text-only follow-up pass
-      // (tagIslamicCitations) rather than being baked into this audio prompt, keeping
-      // the audio prompt simple and the JSON/line output more reliable.
       let words: TimedWord[] = [];
       let text = "";
       let usedModel = "";
 
+      // Use structured JSON output (responseSchema) for single-shot audio — the schema
+      // forces Gemini to emit a valid { word, start, end }[] array rather than free text,
+      // which produces far more accurate and consistent timestamps than the line-delimited
+      // format. temperature:0.1 keeps the transcription deterministic while allowing
+      // the model just enough freedom to find the correct word boundaries.
       for (const modelName of models) {
         try {
           const result = await ai.models.generateContent({
             model: modelName,
-            config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
-            contents: [{ parts: [audioPart, { text: promptText }] }],
+            config: {
+              temperature: 0.1,
+              systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION,
+              responseSchema: WORD_TIMESTAMP_SCHEMA,
+              responseMimeType: "application/json",
+            },
+            contents: [{ parts: [audioPart, { text: WORD_TIMESTAMP_PROMPT_JSON }] }],
           });
-          const parsed = parseWordTimestampLines(result.text || "");
+          const parsed = parseWordTimestampJSON(result.text || "");
           if (looksLikeValidWordList(parsed, durationSeconds)) {
             words = parsed;
             text = wordsToText(parsed);
             usedModel = modelName;
             break;
           }
-          console.warn(`[Transcribe] ${modelName} word-timestamp output didn't look valid, trying next model`);
+          // Schema output didn't yield a valid word list — fall through to line-format retry
+          console.warn(`[Transcribe] ${modelName} JSON schema output invalid, retrying with line format`);
+          const lineResult = await ai.models.generateContent({
+            model: modelName,
+            config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
+            contents: [{ parts: [audioPart, { text: promptText }] }],
+          });
+          const lineParsed = parseWordTimestampLines(lineResult.text || "");
+          if (looksLikeValidWordList(lineParsed, durationSeconds)) {
+            words = lineParsed;
+            text = wordsToText(lineParsed);
+            usedModel = modelName;
+            break;
+          }
+          console.warn(`[Transcribe] ${modelName} line-format output also invalid, trying next model`);
         } catch (err: any) {
           const status = err?.status || err?.code;
           const msg = String(err?.message || "");
@@ -276,8 +294,7 @@ Strict rules — follow every one without exception:
         }
       }
 
-      // Every model's word-timestamp attempt was unusable — fall back to the plain-
-      // prose prompt so we still return a working transcript, just without timestamps.
+      // Every attempt failed — fall back to plain prose so we still return a transcript.
       if (!text) {
         try {
           const result = await ai.models.generateContent({
@@ -294,15 +311,18 @@ Strict rules — follow every one without exception:
       let taggedText = await tagIslamicCitations(ai, text);
 
       if (wantsProUpgrade && usedModel && usedModel !== "gemini-2.5-pro" && /<quran |<hadith /.test(taggedText)) {
-        // Flash found religious content — re-run this audio through Pro for a more
-        // reliable transcription/citation of it before we spend time verifying.
         try {
           const proResult = await ai.models.generateContent({
             model: "gemini-2.5-pro",
-            config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
-            contents: [{ parts: [audioPart, { text: promptText }] }],
+            config: {
+              temperature: 0.1,
+              systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION,
+              responseSchema: WORD_TIMESTAMP_SCHEMA,
+              responseMimeType: "application/json",
+            },
+            contents: [{ parts: [audioPart, { text: WORD_TIMESTAMP_PROMPT_JSON }] }],
           });
-          const proWords = parseWordTimestampLines(proResult.text || "");
+          const proWords = parseWordTimestampJSON(proResult.text || "");
           if (looksLikeValidWordList(proWords, durationSeconds)) {
             words = proWords;
             text = wordsToText(proWords);

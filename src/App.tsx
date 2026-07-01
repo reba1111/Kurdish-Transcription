@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles, Sun, Moon, Monitor, SpellCheck } from "lucide-react";
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from "firebase/auth";
@@ -35,9 +35,7 @@ const CHUNK_PROGRESS_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "CHUNK_PROGRESS
 // Marks the moment the server starts verifying a detected Quran ayah or Hadith
 // (AlQuran Cloud lookup / Google Search Grounding), which adds noticeable latency.
 const VERIFYING_SOURCES_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "VERIFYING_SOURCES" + CHUNK_PROGRESS_NUL, "g");
-// Carries a JSON-encoded TimedWord[] chunk, embedded so the karaoke/subtitle word
-// list arrives for free as part of the main transcription instead of needing a
-// second audio call (see lib/audioChunker.ts's formatWordsMarker on the server).
+// Matches the WORDS:... marker the server embeds — stripped so it never appears in the visible transcript.
 const WORDS_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "WORDS:([\\s\\S]*?)" + CHUNK_PROGRESS_NUL, "g");
 
 // Matches <quran surah="..." ayah="..." verified="true|false">text</quran> and
@@ -89,84 +87,6 @@ function parseCitationSegments(text: string): (string | CitationSegment)[] {
   return segments;
 }
 
-type TimedWord = { word: string; start: number; end: number };
-interface SubtitleCue { start: number; end: number; lines: string[]; }
-
-function formatSubtitleTimestamp(seconds: number, format: 'srt' | 'vtt'): string {
-  const totalMs = Math.max(0, Math.round(seconds * 1000));
-  const h = Math.floor(totalMs / 3600000);
-  const m = Math.floor((totalMs % 3600000) / 60000);
-  const s = Math.floor((totalMs % 60000) / 1000);
-  const ms = totalMs % 1000;
-  const pad = (n: number, len = 2) => String(n).padStart(len, '0');
-  const sep = format === 'srt' ? ',' : '.';
-  return `${pad(h)}:${pad(m)}:${pad(s)}${sep}${pad(ms, 3)}`;
-}
-
-/** Wraps a cue's text into at most maxLines lines of at most maxCharsPerLine chars each. */
-function wrapSubtitleText(text: string, maxCharsPerLine = 42, maxLines = 2): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let line = '';
-  for (const word of words) {
-    const candidate = line ? `${line} ${word}` : word;
-    if (candidate.length > maxCharsPerLine && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = candidate;
-    }
-  }
-  if (line) lines.push(line);
-  return lines.slice(0, maxLines);
-}
-
-/** Groups word-level timestamps (already fetched for the karaoke highlight view) into
- * subtitle cues, breaking on long pauses or once a cue grows too long to read
- * comfortably — built locally from data we already have instead of paying for a
- * second Gemini audio pass just to re-derive cue timing. */
-function buildSubtitleCues(words: TimedWord[]): SubtitleCue[] {
-  const MAX_CUE_CHARS = 84; // 2 lines x 42 chars
-  const MAX_CUE_DURATION = 7; // seconds
-  const PAUSE_BREAK = 0.8; // seconds
-
-  const raw: { start: number; end: number; text: string }[] = [];
-  let cur: { start: number; end: number; text: string } | null = null;
-
-  for (const w of words) {
-    const word = w.word.trim();
-    if (!word) continue;
-    if (cur) {
-      const gap = w.start - cur.end;
-      const candidate = `${cur.text} ${word}`;
-      const duration = w.end - cur.start;
-      if (gap > PAUSE_BREAK || candidate.length > MAX_CUE_CHARS || duration > MAX_CUE_DURATION) {
-        raw.push(cur);
-        cur = { start: w.start, end: w.end, text: word };
-      } else {
-        cur.text = candidate;
-        cur.end = w.end;
-      }
-    } else {
-      cur = { start: w.start, end: w.end, text: word };
-    }
-  }
-  if (cur) raw.push(cur);
-
-  return raw.map(c => ({ start: c.start, end: c.end, lines: wrapSubtitleText(c.text) }));
-}
-
-function buildSRT(cues: SubtitleCue[]): string {
-  return cues
-    .map((c, i) => `${i + 1}\n${formatSubtitleTimestamp(c.start, 'srt')} --> ${formatSubtitleTimestamp(c.end, 'srt')}\n${c.lines.join('\n')}`)
-    .join('\n\n');
-}
-
-function buildVTT(cues: SubtitleCue[]): string {
-  return 'WEBVTT\n\n' + cues
-    .map(c => `${formatSubtitleTimestamp(c.start, 'vtt')} --> ${formatSubtitleTimestamp(c.end, 'vtt')}\n${c.lines.join('\n')}`)
-    .join('\n\n');
-}
 
 /** Splits correctedText into plain/highlighted segments by locating each error's
  * `corrected` substring in order. Falls back to treating an unlocatable substring as
@@ -210,6 +130,40 @@ function TranscriptionWithCitations({ text }: { text: string }) {
   );
 }
 
+interface KaraokeWord { word: string; start: number; end: number }
+
+function KaraokeView({ words, audioRef, currentPct }: {
+  words: KaraokeWord[];
+  audioRef: React.RefObject<HTMLAudioElement | null>;
+  currentPct: number;
+}) {
+  // currentPct triggers re-renders (driven by rAF in the parent); we read
+  // currentTime directly from the element so we always get the freshest value.
+  void currentPct;
+  const t = audioRef.current ? audioRef.current.currentTime : -1;
+  return (
+    <div className="text-xl sm:text-2xl md:text-3xl leading-[2.8] text-right" dir="rtl">
+      {words.map((w, i) => {
+        const nextStart = i + 1 < words.length ? words[i + 1].start : w.end;
+        const active = t >= w.start && t < nextStart;
+        const past   = t >= nextStart;
+        return (
+          <span
+            key={i}
+            onClick={() => { if (audioRef.current) audioRef.current.currentTime = w.start; }}
+            className={`cursor-pointer inline-block mx-[2px] rounded transition-all duration-100 ${
+              active ? 'bg-[#ff4e00] text-white scale-105 px-[5px]'
+              : past  ? 'px-[2px]'
+              :         'px-[2px]'
+            }`}
+            style={past ? { color: 'var(--text-muted)' } : active ? undefined : { color: 'var(--text-primary)' }}
+          >{w.word}</span>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function App() {
   const { theme, setTheme } = useTheme();
   const [user, setUser] = useState<FirebaseUser | null | undefined>(undefined); // undefined = loading
@@ -238,10 +192,8 @@ export default function App() {
   const [summary, setSummary] = useState<string>('');
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
-  const [isExportingSubtitles, setIsExportingSubtitles] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
-  const [timedWords, setTimedWords] = useState<TimedWord[]>([]);
-  const [isTimedTranscribing, setIsTimedTranscribing] = useState(false);
+  const [timedWords, setTimedWords] = useState<{ word: string; start: number; end: number }[]>([]);
   const [showTimedView, setShowTimedView] = useState(false);
   const [processStage, setProcessStage] = useState<'idle'|'compressing'|'uploading'|'transcribing'>('idle');
   const [chunkProgress, setChunkProgress] = useState<{ current: number; total: number } | null>(null);
@@ -255,7 +207,6 @@ export default function App() {
   const [isCorrectingGrammar, setIsCorrectingGrammar] = useState(false);
   const [grammarError, setGrammarError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const timedAbortControllerRef = useRef<AbortController | null>(null);
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
 
@@ -267,7 +218,6 @@ export default function App() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef<'min'|'max'|'scrubber'|null>(null);
-  const currentTimeRef = useRef(0);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -303,11 +253,6 @@ export default function App() {
   }, []);
 
   // Sync audio currentTime → currentPct; enforce loop between sliderMin–sliderMax.
-  // Uses requestAnimationFrame instead of the 'timeupdate' event: timeupdate fires at
-  // a roughly fixed WALL-CLOCK interval (~4x/sec) regardless of playbackRate, so at
-  // higher speeds the media-time gap between updates grows and can skip over short
-  // words entirely — breaking the karaoke highlight above 1x. rAF samples currentTime
-  // every screen refresh, so no word-sized window gets missed at any speed.
   useEffect(() => {
     const el = audioElRef.current;
     if (!el) return;
@@ -315,7 +260,6 @@ export default function App() {
     const tick = () => {
       const dur = el.duration;
       if (dur > 0 && isFinite(dur)) {
-        currentTimeRef.current = el.currentTime;
         const pct = (el.currentTime / dur) * 100;
         setCurrentPct(pct);
         const maxTime = (sliderMax / 100) * dur;
@@ -490,8 +434,6 @@ export default function App() {
     setError(null);
     setTranscription("");
     setIsEditingTranscription(false);
-    setTimedWords([]);
-    setShowTimedView(false);
     setChunkProgress(null);
     setIsVerifyingSources(false);
 
@@ -538,13 +480,12 @@ export default function App() {
       const decoder = new TextDecoder();
       let fullText = "";
       let pending = "";
+      let streamedWords: { word: string; start: number; end: number }[] = [];
       while (true) {
         const { value, done } = await reader.read();
         if (value) {
           pending += decoder.decode(value, { stream: !done });
 
-          // Pull out any complete progress markers (in order) and update state,
-          // but hold back a trailing partial marker until more data arrives.
           const combinedMarkerRe = new RegExp(`${CHUNK_PROGRESS_MARKER_RE.source}|${VERIFYING_SOURCES_MARKER_RE.source}|${WORDS_MARKER_RE.source}`, "g");
           let match: RegExpExecArray | null;
           let lastIndex = 0;
@@ -554,14 +495,13 @@ export default function App() {
             if (match[1] !== undefined) {
               setChunkProgress({ current: Number(match[1]), total: Number(match[2]) });
             } else if (match[3] !== undefined) {
-              // Word-timestamp chunk arriving inline with the transcript — accumulate
-              // rather than replace, since long audio emits one of these per chunk.
               try {
-                const newWords = JSON.parse(match[3]);
-                if (Array.isArray(newWords) && newWords.length > 0) {
-                  setTimedWords(prev => [...prev, ...newWords]);
+                const chunk = JSON.parse(match[3]);
+                if (Array.isArray(chunk) && chunk.length > 0) {
+                  streamedWords = [...streamedWords, ...chunk];
+                  setTimedWords(prev => [...prev, ...chunk]);
                 }
-              } catch { /* malformed marker, ignore */ }
+              } catch { /* malformed, ignore */ }
             } else {
               setIsVerifyingSources(true);
             }
@@ -586,6 +526,13 @@ export default function App() {
       setChunkProgress(null);
       setIsVerifyingSources(false);
 
+      if (streamedWords.length > 0) {
+        const el = audioElRef.current;
+        if (el) el.currentTime = 0;
+        setCurrentPct(0);
+        setShowTimedView(true);
+      }
+
       if (fullText.trim()) {
         await saveToHistory({ text: fullText, language: langToUse, timestamp: Date.now(), model: selectedModel });
       }
@@ -609,61 +556,6 @@ export default function App() {
     runTranscription(audioBlob, langToUse, shouldCompress);
   };
 
-  // Fetches per-word timestamps for the karaoke highlight view and subtitle export —
-  // only called on demand (toggle click / export), not automatically after every
-  // transcription. It's a second full audio-to-text request, and most transcriptions
-  // are never viewed in highlight mode or exported as subtitles, so eagerly firing it
-  // every time doubled audio-token cost for no benefit in the common case.
-  const ensureTimedWords = async (): Promise<TimedWord[]> => {
-    // Validate cached words: if the last word ends before 65% of the audio duration,
-    // the timestamps are likely from a truncated model response or from the
-    // silence-trimmed audio timeline without a correct remap. Discard and re-fetch from
-    // /api/transcribe-timed, which always sends the original untrimmed audio to Gemini,
-    // guaranteeing timestamps that match what the browser plays back.
-    if (timedWords.length > 0) {
-      const lastEnd = timedWords[timedWords.length - 1].end;
-      const isStale = audioDuration > 3 && lastEnd < audioDuration * 0.65;
-      if (!isStale) return timedWords;
-      console.warn(`[Karaoke] Stale timestamps: last word ends at ${lastEnd.toFixed(1)}s but audio is ${audioDuration.toFixed(1)}s — re-fetching.`);
-      setTimedWords([]);
-    }
-    if (!audioBlob) return [];
-    const ac = new AbortController();
-    timedAbortControllerRef.current = ac;
-    setIsTimedTranscribing(true);
-    try {
-      let uploadBlob: Blob = audioBlob;
-      if (shouldCompress || audioBlob.size > VERCEL_BODY_SIZE_LIMIT) {
-        try { uploadBlob = await compressAudioToMp3(audioBlob); } catch { uploadBlob = audioBlob; }
-      }
-      if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) return [];
-
-      const timedFormData = new FormData();
-      timedFormData.append("audio", uploadBlob);
-      timedFormData.append("language", targetLanguage);
-      timedFormData.append("model", selectedModel);
-      const r = await fetch("/api/transcribe-timed", { method: "POST", body: timedFormData, signal: ac.signal });
-      if (!r.ok) return [];
-      const words = await r.json();
-      if (Array.isArray(words) && words.length > 0) {
-        setTimedWords(words);
-        return words;
-      }
-      return [];
-    } catch {
-      return [];
-    } finally {
-      setIsTimedTranscribing(false);
-      timedAbortControllerRef.current = null;
-    }
-  };
-
-  const cancelTimedTranscription = () => {
-    timedAbortControllerRef.current?.abort();
-    timedAbortControllerRef.current = null;
-    setIsTimedTranscribing(false);
-  };
-
   // Translates the already-transcribed Kurdish text to Arabic via a cheap text-only
   // request instead of re-uploading and re-transcribing the audio — audio tokens cost
   // far more than text tokens, and the Kurdish text is already known to be correct.
@@ -672,12 +564,8 @@ export default function App() {
     setTargetLanguage('ar');
     setIsTranscribing(true);
     setError(null);
-    // Any previously-fetched karaoke timestamps belong to the Kurdish audio's words —
-    // leaving showTimedView on would keep rendering that stale Kurdish word list over
-    // the new Arabic text instead of showing the translation.
-    setTimedWords([]);
-    setShowTimedView(false);
     setIsEditingTranscription(false);
+    setTimedWords([]); setShowTimedView(false);
     const kurdishText = transcription;
     setTranscription("");
     try {
@@ -853,57 +741,6 @@ export default function App() {
     setShowExportMenu(false);
   };
 
-  const exportSubtitles = async (format: 'srt' | 'vtt') => {
-    if (!audioBlob) return;
-    setIsExportingSubtitles(true);
-    setShowExportMenu(false);
-    try {
-      // Build cues from word timestamps we already have (or lazily fetch once) —
-      // avoids a dedicated Gemini Pro audio call to re-derive timing we can compute
-      // locally for free.
-      const words = await ensureTimedWords();
-      let text: string;
-      if (words.length > 0) {
-        const cues = buildSubtitleCues(words);
-        text = format === 'srt' ? buildSRT(cues) : buildVTT(cues);
-      } else {
-        // Fallback only: word timestamps unavailable (e.g. the lazy fetch failed) —
-        // ask Gemini directly for a subtitle file from the audio.
-        let uploadBlob: Blob = audioBlob;
-        if (shouldCompress || audioBlob.size > VERCEL_BODY_SIZE_LIMIT) {
-          try { uploadBlob = await compressAudioToMp3(audioBlob); } catch { uploadBlob = audioBlob; }
-        }
-        if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) {
-          setError("دەنگەکە تەنانەت دوای بچووککردنەوەش زۆر گەورەیە. تکایە کورتکراوەیەکی کەمتری دەنگەکە باربکە.");
-          return;
-        }
-
-        const formData = new FormData();
-        formData.append("audio", uploadBlob);
-        formData.append("language", targetLanguage);
-        formData.append("format", format);
-        formData.append("compress", shouldCompress ? "true" : "false");
-        const res = await fetch("/api/subtitles", { method: "POST", body: formData });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: "هەڵەیەک ڕوویدا" }));
-          setError(err.error || "هەڵەیەک ڕوویدا لە دروستکردنی ژێرنووس.");
-          return;
-        }
-        text = await res.text();
-      }
-      const mimeType = format === 'srt' ? 'text/srt;charset=utf-8' : 'text/vtt;charset=utf-8';
-      const blob = new Blob([text], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `voxscript-subtitles-${Date.now()}.${format}`;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch {
-      setError("پەیوەندی لەگەڵ سێرڤەر نییە.");
-    } finally {
-      setIsExportingSubtitles(false);
-    }
-  };
 
   const shareText = (platform: 'telegram' | 'whatsapp' | 'native', text: string) => {
     // Telegram & WhatsApp have message length limits — trim gracefully
@@ -1598,22 +1435,6 @@ export default function App() {
                                   <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>{sub}</span>
                                 </button>
                               ))}
-                              {audioBlob && (
-                                <div style={{ borderTop: '1px solid var(--border-soft)' }}>
-                                  <p className="px-4 pt-2.5 pb-1 text-[9px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-faint)' }}>ژێرنووس</p>
-                                  {(['srt', 'vtt'] as const).map(fmt => (
-                                    <button key={fmt} onClick={() => exportSubtitles(fmt)} disabled={isExportingSubtitles}
-                                      className="w-full flex flex-col items-start px-4 py-2.5 text-right hover:bg-[#22d3ee]/08 transition-colors border-b border-[#ffffff06] last:border-0 disabled:opacity-50"
-                                    >
-                                      <span className="text-xs text-[#22d3ee] font-medium flex items-center gap-1.5">
-                                        {isExportingSubtitles ? <Loader2 size={10} className="animate-spin" /> : null}
-                                        دابگرە بە .{fmt.toUpperCase()}
-                                      </span>
-                                      <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>{fmt === 'srt' ? 'بۆ زۆربەی پلەیەرەکان' : 'بۆ وێب و یوتیوب'}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
                             </motion.div>
                           )}
                         </AnimatePresence>
@@ -1651,75 +1472,29 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  {/* Karaoke toggle — fetches word timestamps on demand, not automatically */}
-                  <div className="px-5 sm:px-7 pt-4 flex items-center gap-2" dir="ltr">
-                    {!isTranscribing && transcription.trim() && (
-                      <>
-                        <button
-                          onClick={() => setShowTimedView(false)}
-                          className={`px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${!showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
-                          style={showTimedView ? { color: 'var(--text-muted)' } : undefined}
-                        >تێکستی ئاسایی</button>
-                        {isTimedTranscribing ? (
-                          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold border border-[#ffffff10]" style={{ color: 'var(--text-muted)' }}>
-                            <Loader2 size={11} className="animate-spin" />هایلایت ئامادەدەبێت...
-                            <button onClick={cancelTimedTranscription}
-                              className="text-[#555] hover:text-[#ff4e00] transition-colors mr-1"
-                            ><X size={12} /></button>
-                          </span>
-                        ) : (
-                          <button
-                            onClick={async () => {
-                              const words = await ensureTimedWords();
-                              if (words.length > 0) {
-                                // Seek back to the start of the playback range so the
-                                // user sees word-by-word tracking from the beginning,
-                                // not from wherever the audio happened to be paused.
-                                const el = audioElRef.current;
-                                if (el && audioDuration > 0) {
-                                  el.currentTime = (sliderMin / 100) * audioDuration;
-                                  setCurrentPct(sliderMin);
-                                }
-                                setShowTimedView(true);
-                              }
-                            }}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
-                            style={showTimedView ? undefined : { color: 'var(--text-muted)' }}
-                          >🎵 هایلایتی دەنگ</button>
-                        )}
-                      </>
-                    )}
-                  </div>
-
+                  {/* Karaoke toggle — only shown when word timestamps are available */}
+                  {!isTranscribing && timedWords.length > 0 && (
+                    <div className="px-5 sm:px-7 pt-2 pb-1 flex items-center gap-2" dir="ltr">
+                      <button
+                        onClick={() => setShowTimedView(false)}
+                        className={`px-3 py-1 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${!showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40'}`}
+                        style={showTimedView ? { color: 'var(--text-muted)' } : undefined}
+                      >تێکستی ئاسایی</button>
+                      <button
+                        onClick={() => {
+                          const el = audioElRef.current;
+                          if (el) el.currentTime = 0;
+                          setCurrentPct(0);
+                          setShowTimedView(true);
+                        }}
+                        className={`px-3 py-1 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40'}`}
+                        style={showTimedView ? undefined : { color: 'var(--text-muted)' }}
+                      >🎵 هایلایتی دەنگ</button>
+                    </div>
+                  )}
                   <div className="px-5 sm:px-7 py-6 min-h-[120px]">
                     {showTimedView && timedWords.length > 0 ? (
-                      <div className="text-xl sm:text-2xl md:text-3xl leading-[2.6] text-right" dir="rtl">
-                        {(() => {
-                          const t = audioDuration > 0 ? (currentPct / 100) * audioDuration : -1;
-                          return timedWords.map((w, i) => {
-                            const nextStart = i + 1 < timedWords.length ? timedWords[i + 1].start : w.end;
-                            const active = t >= w.start && t < nextStart;
-                            const past = t >= nextStart;
-                            return (
-                              <span
-                                key={i}
-                                onClick={() => {
-                                  const el = audioElRef.current;
-                                  if (el) el.currentTime = w.start;
-                                }}
-                                className="cursor-pointer inline-block transition-all duration-150 rounded mx-[1px]"
-                                style={
-                                  active
-                                    ? { background: '#ff4e00', color: '#fff', padding: '0 5px', borderRadius: '5px', transform: 'scale(1.06)' }
-                                    : past
-                                    ? { color: 'var(--text-muted)', padding: '0 2px' }
-                                    : { color: 'var(--text-primary)', padding: '0 2px' }
-                                }
-                              >{w.word}</span>
-                            );
-                          });
-                        })()}
-                      </div>
+                      <KaraokeView words={timedWords} audioRef={audioElRef} currentPct={currentPct} />
                     ) : isEditingTranscription ? (
                       <textarea
                         ref={editableRef}
