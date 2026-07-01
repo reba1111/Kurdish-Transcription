@@ -267,6 +267,7 @@ export default function App() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef<'min'|'max'|'scrubber'|null>(null);
+  const currentTimeRef = useRef(0);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -312,12 +313,14 @@ export default function App() {
     if (!el) return;
     let rafId: number;
     const tick = () => {
-      if (audioDuration > 0) {
-        const pct = (el.currentTime / audioDuration) * 100;
+      const dur = el.duration;
+      if (dur > 0 && isFinite(dur)) {
+        currentTimeRef.current = el.currentTime;
+        const pct = (el.currentTime / dur) * 100;
         setCurrentPct(pct);
-        const maxTime = (sliderMax / 100) * audioDuration;
+        const maxTime = (sliderMax / 100) * dur;
         if (el.currentTime >= maxTime) {
-          el.currentTime = (sliderMin / 100) * audioDuration;
+          el.currentTime = (sliderMin / 100) * dur;
           if (!el.paused) el.play();
         }
       }
@@ -612,7 +615,18 @@ export default function App() {
   // are never viewed in highlight mode or exported as subtitles, so eagerly firing it
   // every time doubled audio-token cost for no benefit in the common case.
   const ensureTimedWords = async (): Promise<TimedWord[]> => {
-    if (timedWords.length > 0) return timedWords;
+    // Validate cached words: if the last word ends before 65% of the audio duration,
+    // the timestamps are likely from a truncated model response or from the
+    // silence-trimmed audio timeline without a correct remap. Discard and re-fetch from
+    // /api/transcribe-timed, which always sends the original untrimmed audio to Gemini,
+    // guaranteeing timestamps that match what the browser plays back.
+    if (timedWords.length > 0) {
+      const lastEnd = timedWords[timedWords.length - 1].end;
+      const isStale = audioDuration > 3 && lastEnd < audioDuration * 0.65;
+      if (!isStale) return timedWords;
+      console.warn(`[Karaoke] Stale timestamps: last word ends at ${lastEnd.toFixed(1)}s but audio is ${audioDuration.toFixed(1)}s — re-fetching.`);
+      setTimedWords([]);
+    }
     if (!audioBlob) return [];
     const ac = new AbortController();
     timedAbortControllerRef.current = ac;
@@ -1657,7 +1671,17 @@ export default function App() {
                           <button
                             onClick={async () => {
                               const words = await ensureTimedWords();
-                              if (words.length > 0) setShowTimedView(true);
+                              if (words.length > 0) {
+                                // Seek back to the start of the playback range so the
+                                // user sees word-by-word tracking from the beginning,
+                                // not from wherever the audio happened to be paused.
+                                const el = audioElRef.current;
+                                if (el && audioDuration > 0) {
+                                  el.currentTime = (sliderMin / 100) * audioDuration;
+                                  setCurrentPct(sliderMin);
+                                }
+                                setShowTimedView(true);
+                              }
                             }}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
                             style={showTimedView ? undefined : { color: 'var(--text-muted)' }}
@@ -1670,28 +1694,31 @@ export default function App() {
                   <div className="px-5 sm:px-7 py-6 min-h-[120px]">
                     {showTimedView && timedWords.length > 0 ? (
                       <div className="text-xl sm:text-2xl md:text-3xl leading-[2.6] text-right" dir="rtl">
-                        {timedWords.map((w, i) => {
+                        {(() => {
                           const t = audioDuration > 0 ? (currentPct / 100) * audioDuration : -1;
-                          const active = t >= w.start && t < w.end;
-                          const past = t >= w.end;
-                          return (
-                            <span
-                              key={i}
-                              onClick={() => {
-                                const el = audioElRef.current;
-                                if (el) el.currentTime = w.start;
-                              }}
-                              className="cursor-pointer inline-block transition-all duration-150 rounded mx-[1px]"
-                              style={
-                                active
-                                  ? { background: '#ff4e00', color: '#fff', padding: '0 5px', borderRadius: '5px', transform: 'scale(1.06)' }
-                                  : past
-                                  ? { color: 'var(--text-muted)', padding: '0 2px' }
-                                  : { color: 'var(--text-primary)', padding: '0 2px' }
-                              }
-                            >{w.word}</span>
-                          );
-                        })}
+                          return timedWords.map((w, i) => {
+                            const nextStart = i + 1 < timedWords.length ? timedWords[i + 1].start : w.end;
+                            const active = t >= w.start && t < nextStart;
+                            const past = t >= nextStart;
+                            return (
+                              <span
+                                key={i}
+                                onClick={() => {
+                                  const el = audioElRef.current;
+                                  if (el) el.currentTime = w.start;
+                                }}
+                                className="cursor-pointer inline-block transition-all duration-150 rounded mx-[1px]"
+                                style={
+                                  active
+                                    ? { background: '#ff4e00', color: '#fff', padding: '0 5px', borderRadius: '5px', transform: 'scale(1.06)' }
+                                    : past
+                                    ? { color: 'var(--text-muted)', padding: '0 2px' }
+                                    : { color: 'var(--text-primary)', padding: '0 2px' }
+                                }
+                              >{w.word}</span>
+                            );
+                          });
+                        })()}
                       </div>
                     ) : isEditingTranscription ? (
                       <textarea
