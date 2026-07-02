@@ -39,8 +39,15 @@ const VERIFYING_SOURCES_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "VERIFYING_S
 // Matches <quran surah="..." ayah="..." verified="true|false">text</quran> and
 // <hadith narrator="..." verified="true|false">text</hadith> tags the server may embed
 // in a Kurdish transcript when it recognizes recited Quran/Hadith (see lib/islamicTextVerifier.ts).
-const QURAN_TAG_RE = /<quran surah="([^"]*)" ayah="([^"]*)"(?: verified="(true|false)")?>([\s\S]*?)<\/quran>/g;
-const HADITH_TAG_RE = /<hadith narrator="([^"]*)"(?: verified="(true|false)")?>([\s\S]*?)<\/hadith>/g;
+// Attribute order from the server varies (verified may appear before or after surah/ayah),
+// so we extract each attribute individually rather than relying on a fixed order.
+const QURAN_TAG_RE = /<quran\b([^>]*)>([\s\S]*?)<\/quran>/g;
+const HADITH_TAG_RE = /<hadith\b([^>]*)>([\s\S]*?)<\/hadith>/g;
+
+function attrVal(attrs: string, name: string): string | undefined {
+  const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
+  return m ? m[1] : undefined;
+}
 
 interface CitationSegment {
   kind: 'quran' | 'hadith';
@@ -62,24 +69,31 @@ function formatCitationBracket(seg: CitationSegment): string {
 /** Strips citation tags down to ﴿text﴾ [source] bracket notation, for copy/export/history. */
 function stripCitationTags(text: string): string {
   return text
-    .replace(QURAN_TAG_RE, (_m, surah, ayah, verified, inner) => formatCitationBracket({ kind: 'quran', surah, ayah, verified: verified === 'true', text: inner }))
-    .replace(HADITH_TAG_RE, (_m, narrator, verified, inner) => formatCitationBracket({ kind: 'hadith', narrator, verified: verified === 'true', text: inner }));
+    .replace(QURAN_TAG_RE, (_m, attrs, inner) => formatCitationBracket({ kind: 'quran', surah: attrVal(attrs, 'surah'), ayah: attrVal(attrs, 'ayah'), verified: attrVal(attrs, 'verified') === 'true', text: inner }))
+    .replace(HADITH_TAG_RE, (_m, attrs, inner) => formatCitationBracket({ kind: 'hadith', narrator: attrVal(attrs, 'narrator'), verified: attrVal(attrs, 'verified') === 'true', text: inner }));
 }
 
 /** Splits transcription text into plain-text and citation segments for rendering. */
 function parseCitationSegments(text: string): (string | CitationSegment)[] {
-  const combined = new RegExp(`${QURAN_TAG_RE.source}|${HADITH_TAG_RE.source}`, 'g');
+  // Run each regex separately to avoid cross-contamination of capture groups.
   const segments: (string | CitationSegment)[] = [];
+  const entries: { index: number; end: number; seg: CitationSegment | string }[] = [];
+
+  for (const match of text.matchAll(QURAN_TAG_RE)) {
+    const [full, attrs, inner] = match;
+    entries.push({ index: match.index!, end: match.index! + full.length, seg: { kind: 'quran', surah: attrVal(attrs, 'surah'), ayah: attrVal(attrs, 'ayah'), verified: attrVal(attrs, 'verified') === 'true', text: inner } });
+  }
+  for (const match of text.matchAll(HADITH_TAG_RE)) {
+    const [full, attrs, inner] = match;
+    entries.push({ index: match.index!, end: match.index! + full.length, seg: { kind: 'hadith', narrator: attrVal(attrs, 'narrator'), verified: attrVal(attrs, 'verified') === 'true', text: inner } });
+  }
+  entries.sort((a, b) => a.index - b.index);
+
   let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = combined.exec(text))) {
-    if (match.index > lastIndex) segments.push(text.slice(lastIndex, match.index));
-    if (match[1] !== undefined) {
-      segments.push({ kind: 'quran', surah: match[1], ayah: match[2], verified: match[3] === 'true', text: match[4] });
-    } else {
-      segments.push({ kind: 'hadith', narrator: match[5], verified: match[6] === 'true', text: match[7] });
-    }
-    lastIndex = combined.lastIndex;
+  for (const { index, end, seg } of entries) {
+    if (index > lastIndex) segments.push(text.slice(lastIndex, index));
+    segments.push(seg);
+    lastIndex = end;
   }
   if (lastIndex < text.length) segments.push(text.slice(lastIndex));
   return segments;
