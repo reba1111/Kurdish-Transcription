@@ -4,9 +4,10 @@ import formidable from "formidable";
 import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, probeDurationSeconds } from "../lib/audioChunker";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, trimSilence } from "../lib/audioChunker";
 import { transcribeLongAudio } from "../lib/chunkedTranscription";
-import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, verifyAndAnnotate } from "../lib/islamicTextVerifier";
+import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "../lib/islamicTextVerifier";
+import { looksLikeValidWordList, parseWordTimestampJSON, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, WORD_TIMESTAMP_PROMPT_JSON, WORD_TIMESTAMP_SCHEMA, wordsToText, type TimedWord } from "../lib/wordTimestamps";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -18,6 +19,26 @@ export const config = {
 };
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+
+/** Rewrites a Gemini quota-exhaustion error into a friendly Kurdish message with the
+ * UTC-midnight reset time converted to Kurdistan local time. Passes any other error
+ * through unchanged. */
+function friendlyQuotaError(err: any): Error {
+  const msg = String(err?.message || "");
+  if (msg.includes("quota") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("429")) {
+    const nowUTC = new Date();
+    const resetUTC = new Date(nowUTC);
+    resetUTC.setUTCHours(24, 0, 0, 0);
+    const diffMs = resetUTC.getTime() - nowUTC.getTime();
+    const diffH = Math.floor(diffMs / 3600000);
+    const diffM = Math.floor((diffMs % 3600000) / 60000);
+    const resetKurdish = new Date(resetUTC.getTime() + 3 * 3600000);
+    const kh = resetKurdish.getUTCHours().toString().padStart(2, "0");
+    const km = resetKurdish.getUTCMinutes().toString().padStart(2, "0");
+    return new Error(`کۆتای داواکاری ڕۆژانەی Gemini تەواو بووە. دووبارە دەستپێ دەکاتەوە لە ساعەت ${kh}:${km} بەیانی کوردستان (${diffH} کاتژمێر و ${diffM} خولەک دیکە). تکایە مۆدێلی ElevenLabs Scribe بەکاربهێنە یان چاوەڕوانبە.`);
+  }
+  return err instanceof Error ? err : new Error(msg || "Unknown error");
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
@@ -36,12 +57,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const targetLanguage = (Array.isArray(fields.language) ? fields.language[0] : fields.language) || "ku";
     const selectedModel = (Array.isArray(fields.model) ? fields.model[0] : fields.model) || "gemini";
 
-    const fileBuffer = fs.readFileSync(audioFile.filepath);
     let mimeType = audioFile.mimetype || "audio/mpeg";
     if (mimeType === "application/ogg") mimeType = "audio/ogg";
     if (mimeType === "video/webm") mimeType = "audio/webm";
     if (mimeType === "video/mp4") mimeType = "audio/mp4";
 
+    // Both Gemini and ElevenLabs bill audio by duration, so long dead-air stretches
+    // (common in lectures/meetings) cost real money for nothing. Cut them out before
+    // any model sees the file — every downstream path uses this effective file/buffer/
+    // mimeType instead of the raw upload. trimSilence fails open (returns the original
+    // file untouched) on any detection/encode error.
+    const trimResult = await trimSilence(audioFile.filepath);
+    const effectiveFilePath = trimResult.filePath;
+    const speechSegments = trimResult.segments;
+    const fileBuffer = fs.readFileSync(effectiveFilePath);
+    if (speechSegments) mimeType = "audio/mpeg"; // trimSilence always re-encodes to mp3
+
+    try {
     // SCRIBE PATH
     if (selectedModel === "scribe") {
       if (!process.env.ELEVENLABS_API_KEY) {
@@ -73,37 +105,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       if (targetLanguage === "ar") {
-        const arBaseRules = `You are a master Arabic linguist and translator specialising in Kurdish (Sorani) to Arabic.
-Produce a fully-vowelled (مُشَكَّل), grammatically impeccable Modern Standard Arabic (الفصحى) translation.
-
-Strict linguistic rules:
-
-GRAMMAR & SYNTAX (نحو):
-- Apply full iʿrāb (إعراب): ضمة رفع، فتحة نصب، كسرة جر، سكون جزم
-- Mark tanwīn on indefinite words: ـً ـٍ ـٌ
-- Use correct definite article (ال) with sun-letter assimilation
-- Subject–verb agreement in gender and number (مفرد/مثنى/جمع)
-- Correct verb conjugations: tense, voice (معلوم/مجهول), mood
-
-MORPHOLOGY (صرف):
-- Derive words from correct Arabic roots (جذر ثلاثي/رباعي)
-- Use correct morphological patterns (أوزان صرفية)
-- Correct broken plurals: فُعُول، أَفْعَال، فِعَال، فُعَلَاء
-- Proper hamza (همزة وصل vs همزة قطع)
-
-DIACRITICS (تشكيل):
-- Full short vowels on every word: فَتْحَة، كَسْرَة، ضَمَّة، سُكُون
-- Shadda (شدَّة) on all geminate consonants
-- Tanwīn on all indefinite nouns and adjectives
-
-Return ONLY the final fully-vowelled Arabic text — no explanations, no markdown, no HTML.`;
-
         const arPrompt = finalOutput.trim()
           ? `You are a professional Arabic translator with deep expertise in Kurdish (Sorani) to Arabic translation.\nTranslate the following Kurdish Sorani text into flawless Modern Standard Arabic (Fusha/MSA).\nRules:\n- Preserve the original meaning, tone, and nuance precisely — do not add or omit anything.\n- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).\n- Choose the most contextually appropriate Arabic word for each Kurdish term.\n- Transliterate proper nouns correctly.\n- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.\n\nKurdish text:\n${finalOutput}`
           : `You are a professional Arabic translator. Listen to the Kurdish (Sorani) audio and translate it directly into flawless Modern Standard Arabic (Fusha/MSA).\nRules:\n- Preserve the original meaning, tone, and nuance precisely — do not add or omit anything.\n- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).\n- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.`;
 
         const chatRes = await ai.models.generateContent({
           model: "gemini-2.5-flash",
+          config: { temperature: 0 },
           contents: arPrompt,
         });
         finalOutput = (chatRes.text || finalOutput)
@@ -145,9 +153,7 @@ ${finalOutput}`;
       return res.status(500).json({ error: "GEMINI_API_KEY داخل نەکراوە. تکایە لە Vercel Dashboard → Settings → Environment Variables کلیلەکە زیاد بکە." });
     }
 
-    const promptText =
-      targetLanguage === "ar"
-        ? `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish (Sorani) audio carefully and produce a flawless, publication-quality Arabic translation.
+    const arabicPromptText = `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish (Sorani) audio carefully and produce a flawless, publication-quality Arabic translation.
 
 Rules:
 - Translate into Modern Standard Arabic (Fusha/MSA) with rich, natural vocabulary.
@@ -156,8 +162,12 @@ Rules:
 - Choose the most contextually appropriate Arabic word for each Kurdish term.
 - Maintain the flow and rhythm of the original speech — do not make it sound robotic.
 - Transliterate proper nouns and names correctly into Arabic script.
-- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.`
-        : `You are an expert Kurdish (Sorani) speech transcriber. Your task is to produce a perfectly faithful transcription of the spoken audio in Kurdish Sorani script.
+- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.`;
+
+    // Last-resort fallback when every model's word-timestamp attempt (WORD_TIMESTAMP_PROMPT,
+    // used below) produces unusable output — guarantees a working transcript even when
+    // word-timestamps can't be recovered for this particular request.
+    const kurdishProseFallbackPrompt = `You are an expert Kurdish (Sorani) speech transcriber. Your task is to produce a perfectly faithful transcription of the spoken audio in Kurdish Sorani script.
 
 Strict rules — follow every one without exception:
 1. Transcribe EXACTLY what is spoken — do not add, remove, or change any word.
@@ -172,21 +182,24 @@ Strict rules — follow every one without exception:
 5. Do NOT translate, summarize, or paraphrase — only transcribe.
 6. Return ONLY the plain transcribed text — no markdown, no HTML, no labels, no explanations.${ISLAMIC_TEXT_DETECTION_RULE}`;
 
+    // Kept as a generic name for the chunked path below, which still branches on language.
+    const promptText = targetLanguage === "ar" ? arabicPromptText : WORD_TIMESTAMP_PROMPT;
 
-    const models = selectedModel === 'gemini-pro'
-      ? ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]
-      : selectedModel === 'gemini-flash2'
-        ? ["gemini-2.0-flash"]
-        : ["gemini-2.5-flash", "gemini-2.0-flash"];
+
+    // "gemini-pro" no longer calls Pro directly — Pro costs ~6-7x Flash per minute of
+    // audio. Instead we transcribe with Flash first and only re-run the (much cheaper)
+    // Flash output through Pro when it actually contains a Quran/Hadith citation, since
+    // Pro is meaningfully more reliable at diacritizing/citing recited religious text.
+    // Plain speech, which is the vast majority of usage, never touches Pro at all.
+    const wantsProUpgrade = selectedModel === 'gemini-pro';
+    const models = selectedModel === 'gemini-flash2'
+      ? ["gemini-2.5-flash"]
+      : ["gemini-2.5-flash"];
 
     // Long files get split into overlapping 5-minute chunks so each Gemini
     // request stays fast and reliable; short files keep single-shot streaming.
-    let durationSeconds = 0;
-    try {
-      durationSeconds = await probeDurationSeconds(audioFile.filepath);
-    } catch (e) {
-      console.warn("[Chunking] Duration probe failed, falling back to single-shot transcription:", e);
-    }
+    // Duration already came from trimSilence's own probe — no need to re-probe here.
+    const durationSeconds = trimResult.durationSeconds;
 
     if (durationSeconds > CHUNK_THRESHOLD_SECONDS) {
       try {
@@ -194,17 +207,23 @@ Strict rules — follow every one without exception:
         res.setHeader("Transfer-Encoding", "chunked");
         await transcribeLongAudio({
           ai,
-          inputPath: audioFile.filepath,
+          inputPath: effectiveFilePath,
           mimeType,
           models,
           promptText,
           useIslamicSystemPrompt: targetLanguage === "ku",
+          wantsProUpgrade,
+          useWordTimestamps: targetLanguage === "ku",
+          proseFallbackPromptText: targetLanguage === "ku" ? kurdishProseFallbackPrompt : undefined,
+          speechSegments: speechSegments ?? undefined,
+          knownDurationSeconds: durationSeconds,
           onChunkStart: (index, total) => {
             console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
             res.write(formatChunkProgressMarker(index, total));
           },
           onVerifyingStart: () => res.write(formatVerifyingSourcesMarker()),
           onChunkText: (text) => res.write(text),
+          onWordsChunk: (words) => res.write(formatWordsMarker(words)),
         });
         return res.end();
       } finally {
@@ -221,35 +240,124 @@ Strict rules — follow every one without exception:
 
     let lastError: any = null;
 
+    if (targetLanguage === "ku") {
+      let words: TimedWord[] = [];
+      let text = "";
+      let usedModel = "";
+
+      // Use structured JSON output (responseSchema) for single-shot audio — the schema
+      // forces Gemini to emit a valid { word, start, end }[] array rather than free text,
+      // which produces far more accurate and consistent timestamps than the line-delimited
+      // format. temperature:0.1 keeps the transcription deterministic while allowing
+      // the model just enough freedom to find the correct word boundaries.
+      for (const modelName of models) {
+        try {
+          const result = await ai.models.generateContent({
+            model: modelName,
+            config: {
+              temperature: 0.1,
+              systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION,
+              responseSchema: WORD_TIMESTAMP_SCHEMA,
+              responseMimeType: "application/json",
+            },
+            contents: [{ parts: [audioPart, { text: WORD_TIMESTAMP_PROMPT_JSON }] }],
+          });
+          const parsed = parseWordTimestampJSON(result.text || "");
+          if (looksLikeValidWordList(parsed, durationSeconds)) {
+            words = parsed;
+            text = wordsToText(parsed);
+            usedModel = modelName;
+            break;
+          }
+          // Schema output didn't yield a valid word list — fall through to line-format retry
+          console.warn(`[Transcribe] ${modelName} JSON schema output invalid, retrying with line format`);
+          const lineResult = await ai.models.generateContent({
+            model: modelName,
+            config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
+            contents: [{ parts: [audioPart, { text: promptText }] }],
+          });
+          const lineParsed = parseWordTimestampLines(lineResult.text || "");
+          if (looksLikeValidWordList(lineParsed, durationSeconds)) {
+            words = lineParsed;
+            text = wordsToText(lineParsed);
+            usedModel = modelName;
+            break;
+          }
+          console.warn(`[Transcribe] ${modelName} line-format output also invalid, trying next model`);
+        } catch (err: any) {
+          const status = err?.status || err?.code;
+          const msg = String(err?.message || "");
+          const isRetryable = status === 429 || status === 503 || status === 500
+            || msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("high demand") || msg.includes("quota");
+          if (isRetryable) { lastError = err; continue; }
+          throw err;
+        }
+      }
+
+      // Every attempt failed — fall back to plain prose so we still return a transcript.
+      if (!text) {
+        try {
+          const result = await ai.models.generateContent({
+            model: models[models.length - 1],
+            config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
+            contents: [{ parts: [audioPart, { text: kurdishProseFallbackPrompt }] }],
+          });
+          text = result.text || "";
+        } catch (err) {
+          throw friendlyQuotaError(lastError || err);
+        }
+      }
+
+      let taggedText = await tagIslamicCitations(ai, text);
+
+      if (wantsProUpgrade && usedModel && usedModel !== "gemini-2.5-pro" && /<quran |<hadith /.test(taggedText)) {
+        try {
+          const proResult = await ai.models.generateContent({
+            model: "gemini-2.5-pro",
+            config: {
+              temperature: 0.1,
+              systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION,
+              responseSchema: WORD_TIMESTAMP_SCHEMA,
+              responseMimeType: "application/json",
+            },
+            contents: [{ parts: [audioPart, { text: WORD_TIMESTAMP_PROMPT_JSON }] }],
+          });
+          const proWords = parseWordTimestampJSON(proResult.text || "");
+          if (looksLikeValidWordList(proWords, durationSeconds)) {
+            words = proWords;
+            text = wordsToText(proWords);
+            taggedText = await tagIslamicCitations(ai, text);
+          }
+        } catch (e) {
+          console.warn("[Transcribe] Pro re-run for Quran/Hadith failed, keeping original output:", e);
+        }
+      }
+
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Transfer-Encoding", "chunked");
+
+      if (/<quran |<hadith /.test(taggedText)) {
+        res.write(formatVerifyingSourcesMarker());
+      }
+      const annotated = await verifyAndAnnotate(taggedText, ai);
+      if (words.length > 0) {
+        const originalTimeWords = speechSegments ? remapWordsToOriginalTime(words, speechSegments) : words;
+        res.write(formatWordsMarker(originalTimeWords));
+      }
+      res.write(annotated);
+      res.end();
+      return;
+    }
+
     for (const modelName of models) {
       try {
         const responseStream = await ai.models.generateContentStream({
           model: modelName,
-          config: {
-            temperature: 0,
-            ...(targetLanguage === "ku" ? { systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION } : {}),
-          },
+          config: { temperature: 0 },
           contents: [{ parts: [audioPart, { text: promptText }] }],
         });
 
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
-
-        if (targetLanguage === "ku") {
-          // Buffer the full response so a Quran/Hadith tag never gets cut mid-stream,
-          // then verify ayah citations against AlQuran Cloud before sending.
-          let fullText = "";
-          for await (const chunk of responseStream) {
-            if (chunk.text) fullText += chunk.text;
-          }
-          if (/<quran |<hadith /.test(fullText)) {
-            res.setHeader("Transfer-Encoding", "chunked");
-            res.write(formatVerifyingSourcesMarker());
-          }
-          const annotated = await verifyAndAnnotate(fullText, ai);
-          res.end(annotated);
-          return;
-        }
-
         res.setHeader("Transfer-Encoding", "chunked");
         for await (const chunk of responseStream) {
           if (chunk.text) res.write(chunk.text);
@@ -270,20 +378,10 @@ Strict rules — follow every one without exception:
       }
     }
 
-    const lastMsg = String(lastError?.message || '');
-    if (lastMsg.includes('quota') || lastMsg.includes('RESOURCE_EXHAUSTED') || lastMsg.includes('429')) {
-      const nowUTC = new Date();
-      const resetUTC = new Date(nowUTC);
-      resetUTC.setUTCHours(24, 0, 0, 0);
-      const diffMs = resetUTC.getTime() - nowUTC.getTime();
-      const diffH = Math.floor(diffMs / 3600000);
-      const diffM = Math.floor((diffMs % 3600000) / 60000);
-      const resetKurdish = new Date(resetUTC.getTime() + 3 * 3600000);
-      const kh = resetKurdish.getUTCHours().toString().padStart(2, '0');
-      const km = resetKurdish.getUTCMinutes().toString().padStart(2, '0');
-      throw new Error(`کۆتای داواکاری ڕۆژانەی Gemini تەواو بووە. دووبارە دەستپێ دەکاتەوە لە ساعەت ${kh}:${km} بەیانی کوردستان (${diffH} کاتژمێر و ${diffM} خولەک دیکە). تکایە مۆدێلی ElevenLabs Scribe بەکاربهێنە یان چاوەڕوانبە.`);
+    throw friendlyQuotaError(lastError);
+    } finally {
+      if (speechSegments) { try { fs.unlinkSync(effectiveFilePath); } catch {} }
     }
-    throw lastError;
   } catch (error: any) {
     console.error("Transcription error:", error);
     if (!res.headersSent) {

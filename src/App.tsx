@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles, Sun, Moon, Monitor, SpellCheck } from "lucide-react";
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from "firebase/auth";
@@ -39,15 +39,8 @@ const VERIFYING_SOURCES_MARKER_RE = new RegExp(CHUNK_PROGRESS_NUL + "VERIFYING_S
 // Matches <quran surah="..." ayah="..." verified="true|false">text</quran> and
 // <hadith narrator="..." verified="true|false">text</hadith> tags the server may embed
 // in a Kurdish transcript when it recognizes recited Quran/Hadith (see lib/islamicTextVerifier.ts).
-// Attribute order from the server varies (verified may appear before or after surah/ayah),
-// so we extract each attribute individually rather than relying on a fixed order.
-const QURAN_TAG_RE = /<quran\b([^>]*)>([\s\S]*?)<\/quran>/g;
-const HADITH_TAG_RE = /<hadith\b([^>]*)>([\s\S]*?)<\/hadith>/g;
-
-function attrVal(attrs: string, name: string): string | undefined {
-  const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
-  return m ? m[1] : undefined;
-}
+const QURAN_TAG_RE = /<quran surah="([^"]*)" ayah="([^"]*)"(?: verified="(true|false)")?>([\s\S]*?)<\/quran>/g;
+const HADITH_TAG_RE = /<hadith narrator="([^"]*)"(?: verified="(true|false)")?>([\s\S]*?)<\/hadith>/g;
 
 interface CitationSegment {
   kind: 'quran' | 'hadith';
@@ -69,35 +62,29 @@ function formatCitationBracket(seg: CitationSegment): string {
 /** Strips citation tags down to ﴿text﴾ [source] bracket notation, for copy/export/history. */
 function stripCitationTags(text: string): string {
   return text
-    .replace(QURAN_TAG_RE, (_m, attrs, inner) => formatCitationBracket({ kind: 'quran', surah: attrVal(attrs, 'surah'), ayah: attrVal(attrs, 'ayah'), verified: attrVal(attrs, 'verified') === 'true', text: inner }))
-    .replace(HADITH_TAG_RE, (_m, attrs, inner) => formatCitationBracket({ kind: 'hadith', narrator: attrVal(attrs, 'narrator'), verified: attrVal(attrs, 'verified') === 'true', text: inner }));
+    .replace(QURAN_TAG_RE, (_m, surah, ayah, verified, inner) => formatCitationBracket({ kind: 'quran', surah, ayah, verified: verified === 'true', text: inner }))
+    .replace(HADITH_TAG_RE, (_m, narrator, verified, inner) => formatCitationBracket({ kind: 'hadith', narrator, verified: verified === 'true', text: inner }));
 }
 
 /** Splits transcription text into plain-text and citation segments for rendering. */
 function parseCitationSegments(text: string): (string | CitationSegment)[] {
-  // Run each regex separately to avoid cross-contamination of capture groups.
+  const combined = new RegExp(`${QURAN_TAG_RE.source}|${HADITH_TAG_RE.source}`, 'g');
   const segments: (string | CitationSegment)[] = [];
-  const entries: { index: number; end: number; seg: CitationSegment | string }[] = [];
-
-  for (const match of text.matchAll(QURAN_TAG_RE)) {
-    const [full, attrs, inner] = match;
-    entries.push({ index: match.index!, end: match.index! + full.length, seg: { kind: 'quran', surah: attrVal(attrs, 'surah'), ayah: attrVal(attrs, 'ayah'), verified: attrVal(attrs, 'verified') === 'true', text: inner } });
-  }
-  for (const match of text.matchAll(HADITH_TAG_RE)) {
-    const [full, attrs, inner] = match;
-    entries.push({ index: match.index!, end: match.index! + full.length, seg: { kind: 'hadith', narrator: attrVal(attrs, 'narrator'), verified: attrVal(attrs, 'verified') === 'true', text: inner } });
-  }
-  entries.sort((a, b) => a.index - b.index);
-
   let lastIndex = 0;
-  for (const { index, end, seg } of entries) {
-    if (index > lastIndex) segments.push(text.slice(lastIndex, index));
-    segments.push(seg);
-    lastIndex = end;
+  let match: RegExpExecArray | null;
+  while ((match = combined.exec(text))) {
+    if (match.index > lastIndex) segments.push(text.slice(lastIndex, match.index));
+    if (match[1] !== undefined) {
+      segments.push({ kind: 'quran', surah: match[1], ayah: match[2], verified: match[3] === 'true', text: match[4] });
+    } else {
+      segments.push({ kind: 'hadith', narrator: match[5], verified: match[6] === 'true', text: match[7] });
+    }
+    lastIndex = combined.lastIndex;
   }
   if (lastIndex < text.length) segments.push(text.slice(lastIndex));
   return segments;
 }
+
 
 /** Splits correctedText into plain/highlighted segments by locating each error's
  * `corrected` substring in order. Falls back to treating an unlocatable substring as
@@ -141,6 +128,40 @@ function TranscriptionWithCitations({ text }: { text: string }) {
   );
 }
 
+interface KaraokeWord { word: string; start: number; end: number }
+
+function KaraokeView({ words, audioRef, currentPct }: {
+  words: KaraokeWord[];
+  audioRef: React.RefObject<HTMLAudioElement | null>;
+  currentPct: number;
+}) {
+  // currentPct triggers re-renders (driven by rAF in the parent); we read
+  // currentTime directly from the element so we always get the freshest value.
+  void currentPct;
+  const t = audioRef.current ? audioRef.current.currentTime : -1;
+  return (
+    <div className="text-xl sm:text-2xl md:text-3xl leading-[2.8] text-right" dir="rtl">
+      {words.map((w, i) => {
+        const nextStart = i + 1 < words.length ? words[i + 1].start : w.end;
+        const active = t >= w.start && t < nextStart;
+        const past   = t >= nextStart;
+        return (
+          <span
+            key={i}
+            onClick={() => { if (audioRef.current) audioRef.current.currentTime = w.start; }}
+            className={`cursor-pointer inline-block mx-[2px] rounded transition-all duration-100 ${
+              active ? 'bg-[#ff4e00] text-white scale-105 px-[5px]'
+              : past  ? 'px-[2px]'
+              :         'px-[2px]'
+            }`}
+            style={past ? { color: 'var(--text-muted)' } : active ? undefined : { color: 'var(--text-primary)' }}
+          >{w.word}</span>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function App() {
   const { theme, setTheme } = useTheme();
   const [user, setUser] = useState<FirebaseUser | null | undefined>(undefined); // undefined = loading
@@ -169,10 +190,8 @@ export default function App() {
   const [summary, setSummary] = useState<string>('');
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
-  const [isExportingSubtitles, setIsExportingSubtitles] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
   const [timedWords, setTimedWords] = useState<{ word: string; start: number; end: number }[]>([]);
-  const [isTimedTranscribing, setIsTimedTranscribing] = useState(false);
   const [showTimedView, setShowTimedView] = useState(false);
   const [processStage, setProcessStage] = useState<'idle'|'compressing'|'uploading'|'transcribing'>('idle');
   const [chunkProgress, setChunkProgress] = useState<{ current: number; total: number } | null>(null);
@@ -194,6 +213,7 @@ export default function App() {
   const [sliderMax, setSliderMax] = useState(100); // 0–100
   const [currentPct, setCurrentPct] = useState(0); // playback position 0–100
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef<'min'|'max'|'scrubber'|null>(null);
 
@@ -230,31 +250,43 @@ export default function App() {
     return unsub;
   }, []);
 
-  // Sync audio currentTime → currentPct; enforce loop between sliderMin–sliderMax
+  // Sync audio currentTime → currentPct; enforce loop between sliderMin–sliderMax.
   useEffect(() => {
     const el = audioElRef.current;
     if (!el) return;
-    const onTime = () => {
-      if (!audioDuration) return;
-      const pct = (el.currentTime / audioDuration) * 100;
-      setCurrentPct(pct);
-      const maxTime = (sliderMax / 100) * audioDuration;
-      if (el.currentTime >= maxTime) {
-        el.currentTime = (sliderMin / 100) * audioDuration;
-        if (!el.paused) el.play();
+    let rafId: number;
+    const tick = () => {
+      const dur = el.duration;
+      if (dur > 0 && isFinite(dur)) {
+        const pct = (el.currentTime / dur) * 100;
+        setCurrentPct(pct);
+        const maxTime = (sliderMax / 100) * dur;
+        if (el.currentTime >= maxTime) {
+          el.currentTime = (sliderMin / 100) * dur;
+          if (!el.paused) el.play();
+        }
       }
+      rafId = requestAnimationFrame(tick);
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    el.addEventListener('timeupdate', onTime);
     el.addEventListener('play', onPlay);
     el.addEventListener('pause', onPause);
+    rafId = requestAnimationFrame(tick);
     return () => {
-      el.removeEventListener('timeupdate', onTime);
+      cancelAnimationFrame(rafId);
       el.removeEventListener('play', onPlay);
       el.removeEventListener('pause', onPause);
     };
   }, [audioDuration, sliderMin, sliderMax]);
+
+  // Apply the selected playback speed to the audio element whenever it changes
+  // (and whenever a new file is loaded), so karaoke-highlight review can be sped
+  // through or slowed down to catch transcription errors more easily.
+  useEffect(() => {
+    const el = audioElRef.current;
+    if (el) el.playbackRate = playbackRate;
+  }, [playbackRate, audioUrl]);
 
   // Mouse/touch drag logic for dual-range and scrubber
   useEffect(() => {
@@ -347,17 +379,12 @@ export default function App() {
     try {
       setError(null);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Pick a MIME type the browser actually supports; falling back to the default
-      // avoids blobs whose .type mismatches the real encoded format (breaks decoding on iOS).
-      const preferredTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
-      const mimeType = preferredTypes.find(t => MediaRecorder.isTypeSupported(t)) || '';
-      const mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
       mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       mediaRecorder.onstop = () => {
-        const actualMime = mediaRecorder.mimeType || mimeType || 'audio/webm';
-        const blob = new Blob(audioChunksRef.current, { type: actualMime });
+        const blob = new Blob(audioChunksRef.current, { type: "audio/wav" });
         setAudioBlob(blob);
         setAudioUrl(URL.createObjectURL(blob));
         stream.getTracks().forEach(t => t.stop());
@@ -405,8 +432,6 @@ export default function App() {
     setError(null);
     setTranscription("");
     setIsEditingTranscription(false);
-    setTimedWords([]);
-    setShowTimedView(false);
     setChunkProgress(null);
     setIsVerifyingSources(false);
 
@@ -417,17 +442,14 @@ export default function App() {
         setProcessStage('compressing');
         try {
           uploadBlob = await compressAudioToMp3(blob);
-        } catch (compErr) {
-          console.warn('[compress] failed, using original blob:', compErr);
+        } catch {
+          // Decoding/encoding failed — fall back to the original blob. If it's over
+          // the limit the upload will fail with a clear 413 below rather than silently.
           uploadBlob = blob;
         }
       }
       if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) {
-        setError(
-          needsCompression
-            ? "بچووككردنەوەی دەنگ لە موبایلەکەت کار نەکرد و فایلەکە زۆر گەورەیە (زیاتر لە 4.5MB). تکایە فایلێکی کەمتر باربکە یان لە لاپتۆپ تۆمار بکە."
-            : "دەنگەکە زۆر گەورەیە. تکایە گزینەی «بچووككردنەوەی قەبارە» چالاک بکە یان فایلێکی کەمتر باربکە."
-        );
+        setError("دەنگەکە تەنانەت دوای بچووککردنەوەش زۆر گەورەیە. تکایە کورتکراوەیەکی کەمتری دەنگەکە باربکە.");
         return;
       }
 
@@ -438,21 +460,6 @@ export default function App() {
       formData.append("model", selectedModel);
       formData.append("compress", compress ? "true" : "false");
 
-      // Always fetch word timestamps in background for karaoke highlight
-      const timedFormData = new FormData();
-      timedFormData.append("audio", uploadBlob);
-      timedFormData.append("language", langToUse);
-      timedFormData.append("model", selectedModel);
-      setIsTimedTranscribing(true);
-      const timedPromise = fetch("/api/transcribe-timed", { method: "POST", body: timedFormData })
-        .then(r => r.ok ? r.json() : Promise.reject())
-        .then(words => {
-          if (Array.isArray(words) && words.length > 0) setTimedWords(words);
-        })
-        .catch(() => {})
-        .finally(() => setIsTimedTranscribing(false));
-
-      setProcessStage('uploading');
       const response = await fetch("/api/transcribe", { method: "POST", body: formData, signal: ac.signal });
 
       if (response.status === 404) { setError("هەڵەی 404: API نەدۆزرایەوە."); return; }
@@ -471,46 +478,57 @@ export default function App() {
       const decoder = new TextDecoder();
       let fullText = "";
       let pending = "";
+      let streamedWords: { word: string; start: number; end: number }[] = [];
+
+      // Extracts all complete NUL-delimited markers from `pending`, calls the handler
+      // for each, and returns the leftover text with markers removed. Keeps any
+      // trailing incomplete marker buffered for the next chunk.
+      const processMarkers = (buf: string, isDone: boolean): string => {
+        let out = "";
+        let i = 0;
+        while (i < buf.length) {
+          const nulPos = buf.indexOf(CHUNK_PROGRESS_NUL, i);
+          if (nulPos === -1) { out += buf.slice(i); break; }
+
+          // Text before this NUL is visible transcript
+          out += buf.slice(i, nulPos);
+
+          // Find closing NUL
+          const closePos = buf.indexOf(CHUNK_PROGRESS_NUL, nulPos + 1);
+          if (closePos === -1) {
+            // Incomplete marker — keep from nulPos for next chunk (unless done)
+            if (isDone) { /* discard partial */ } else { pending = buf.slice(nulPos); }
+            return out;
+          }
+
+          const inner = buf.slice(nulPos + 1, closePos);
+          if (inner.startsWith("CHUNK_PROGRESS:")) {
+            const parts = inner.slice("CHUNK_PROGRESS:".length).split("/");
+            if (parts.length === 2) setChunkProgress({ current: Number(parts[0]), total: Number(parts[1]) });
+          } else if (inner === "VERIFYING_SOURCES") {
+            setIsVerifyingSources(true);
+          } else if (inner.startsWith("WORDS:")) {
+            try {
+              const chunk = JSON.parse(inner.slice("WORDS:".length));
+              if (Array.isArray(chunk) && chunk.length > 0) {
+                streamedWords = [...streamedWords, ...chunk];
+                setTimedWords(prev => [...prev, ...chunk]);
+              }
+            } catch { /* malformed, ignore */ }
+          }
+          i = closePos + 1;
+        }
+        pending = "";
+        return out;
+      };
+
       while (true) {
         const { value, done } = await reader.read();
         if (value) {
-          pending += decoder.decode(value, { stream: !done });
-
-          // Pull out any complete progress markers (in order) and update state,
-          // but hold back a trailing partial marker until more data arrives.
-          const combinedMarkerRe = new RegExp(`${CHUNK_PROGRESS_MARKER_RE.source}|${VERIFYING_SOURCES_MARKER_RE.source}`, "g");
-          let match: RegExpExecArray | null;
-          let lastIndex = 0;
-          let visible = "";
-          while ((match = combinedMarkerRe.exec(pending))) {
-            visible += pending.slice(lastIndex, match.index);
-            if (match[1] !== undefined) {
-              setChunkProgress({ current: Number(match[1]), total: Number(match[2]) });
-            } else {
-              setIsVerifyingSources(true);
-            }
-            lastIndex = combinedMarkerRe.lastIndex;
-          }
-          const rest = pending.slice(lastIndex);
-          // Hold back if there's either a partial NUL-delimited marker or an
-          // open <quran / <hadith tag that hasn't been closed yet — otherwise
-          // the raw opening tag leaks into the rendered transcript.
-          const partialMarkerStart = rest.indexOf(CHUNK_PROGRESS_NUL);
-          const openTagMatch = rest.match(/<(quran|hadith)(?![^>]*\/>)[^>]*(?:>(?![\s\S]*<\/\1>)|$)/);
-          if (done) {
-            visible += rest;
-            pending = "";
-          } else if (partialMarkerStart !== -1) {
-            visible += rest.slice(0, partialMarkerStart);
-            pending = rest.slice(partialMarkerStart);
-          } else if (openTagMatch && openTagMatch.index !== undefined) {
-            visible += rest.slice(0, openTagMatch.index);
-            pending = rest.slice(openTagMatch.index);
-          } else {
-            visible += rest;
-            pending = "";
-          }
-
+          const chunk = decoder.decode(value, { stream: !done });
+          const buf = pending + chunk;
+          pending = "";
+          const visible = processMarkers(buf, done);
           if (visible) { fullText += visible; setTranscription(p => p + visible); }
         }
         if (done) break;
@@ -520,14 +538,11 @@ export default function App() {
       setChunkProgress(null);
       setIsVerifyingSources(false);
 
-      // Wait for timestamps to arrive then auto-enable highlight view
-      if (timedPromise) {
-        timedPromise.then(() => {
-          setTimedWords(prev => {
-            if (prev.length > 0) setShowTimedView(true);
-            return prev;
-          });
-        }).catch(() => {});
+      if (streamedWords.length > 0) {
+        const el = audioElRef.current;
+        if (el) el.currentTime = 0;
+        setCurrentPct(0);
+        setShowTimedView(true);
       }
 
       if (fullText.trim()) {
@@ -551,6 +566,54 @@ export default function App() {
       setTargetLanguage(overrideLanguage);
     }
     runTranscription(audioBlob, langToUse, shouldCompress);
+  };
+
+  // Translates the already-transcribed Kurdish text to Arabic via a cheap text-only
+  // request instead of re-uploading and re-transcribing the audio — audio tokens cost
+  // far more than text tokens, and the Kurdish text is already known to be correct.
+  const translateExistingText = async () => {
+    if (!transcription.trim()) return;
+    setTargetLanguage('ar');
+    setIsTranscribing(true);
+    setError(null);
+    setIsEditingTranscription(false);
+    setTimedWords([]); setShowTimedView(false);
+    const kurdishText = transcription;
+    setTranscription("");
+    try {
+      const response = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: stripCitationTags(kurdishText) }),
+      });
+      if (!response.ok) {
+        const txt = await response.text();
+        try { setError(JSON.parse(txt).error || "هەڵەیەک ڕوویدا."); }
+        catch { setError("هەڵەیەک ڕوویدا لە کاتی وەرگێڕانەکە."); }
+        setTranscription(kurdishText);
+        return;
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No reader");
+      const decoder = new TextDecoder();
+      let fullText = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (value) {
+          const chunk = decoder.decode(value, { stream: !done });
+          if (chunk) { fullText += chunk; setTranscription(p => p + chunk); }
+        }
+        if (done) break;
+      }
+      if (fullText.trim()) {
+        await saveToHistory({ text: fullText, language: 'ar', timestamp: Date.now(), model: selectedModel });
+      }
+    } catch {
+      setError("پەیوەندی لەگەڵ سێرڤەر نییە.");
+      setTranscription(kurdishText);
+    } finally {
+      setIsTranscribing(false);
+    }
   };
 
   const copyText = (text: string, id: string | null = null) => {
@@ -690,45 +753,6 @@ export default function App() {
     setShowExportMenu(false);
   };
 
-  const exportSubtitles = async (format: 'srt' | 'vtt') => {
-    if (!audioBlob) return;
-    setIsExportingSubtitles(true);
-    setShowExportMenu(false);
-    try {
-      let uploadBlob: Blob = audioBlob;
-      if (shouldCompress || audioBlob.size > VERCEL_BODY_SIZE_LIMIT) {
-        try { uploadBlob = await compressAudioToMp3(audioBlob); } catch { uploadBlob = audioBlob; }
-      }
-      if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) {
-        setError("دەنگەکە تەنانەت دوای بچووککردنەوەش زۆر گەورەیە. تکایە کورتکراوەیەکی کەمتری دەنگەکە باربکە.");
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append("audio", uploadBlob);
-      formData.append("language", targetLanguage);
-      formData.append("format", format);
-      formData.append("compress", shouldCompress ? "true" : "false");
-      const res = await fetch("/api/subtitles", { method: "POST", body: formData });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "هەڵەیەک ڕوویدا" }));
-        setError(err.error || "هەڵەیەک ڕوویدا لە دروستکردنی ژێرنووس.");
-        return;
-      }
-      const text = await res.text();
-      const mimeType = format === 'srt' ? 'text/srt;charset=utf-8' : 'text/vtt;charset=utf-8';
-      const blob = new Blob([text], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `voxscript-subtitles-${Date.now()}.${format}`;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch {
-      setError("پەیوەندی لەگەڵ سێرڤەر نییە.");
-    } finally {
-      setIsExportingSubtitles(false);
-    }
-  };
 
   const shareText = (platform: 'telegram' | 'whatsapp' | 'native', text: string) => {
     // Telegram & WhatsApp have message length limits — trim gracefully
@@ -1082,9 +1106,9 @@ export default function App() {
                       className="w-full text-sm font-medium py-2.5 pl-3 pr-8 rounded-lg outline-none cursor-pointer appearance-none"
                       style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }} dir="ltr"
                     >
-                      <option value="gemini-pro" className="bg-card">Gemini 2.5 Pro ★</option>
+                      <option value="gemini-pro" className="bg-card">Gemini 2.5 Pro ★ (Smart)</option>
                       <option value="gemini" className="bg-card">Gemini 2.5 Flash</option>
-                      <option value="gemini-flash2" className="bg-card">Gemini 2.0 Flash</option>
+                      <option value="gemini-flash2" className="bg-card">Gemini 2.5 Flash (Fast)</option>
                       <option value="scribe" className="bg-card">ElevenLabs Scribe</option>
                     </select>
                     <ChevronDown size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-dim)' }} />
@@ -1255,6 +1279,15 @@ export default function App() {
                             </button>
                           </div>
 
+                          {/* ── Playback speed ── */}
+                          <div className="flex items-center justify-center gap-1">
+                            {[0.5, 0.75, 1, 1.25, 1.5, 2].map(rate => (
+                              <button key={rate} onClick={() => setPlaybackRate(rate)}
+                                className={`px-2 py-1 rounded-md text-[10px] font-mono font-bold transition-colors ${playbackRate === rate ? 'bg-[#3b82f6] text-white' : 'text-[#777] hover:text-white hover:bg-[#ffffff10]'}`}
+                              >{rate}x</button>
+                            ))}
+                          </div>
+
                           {/* ── Transcribe / Translate selected range ── */}
                           {audioDuration > 0 && sliderMax > sliderMin && (
                             <div className="flex gap-2 pt-1" dir="rtl">
@@ -1366,7 +1399,7 @@ export default function App() {
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       {targetLanguage === 'ku' && audioBlob && !isTranscribing && (
-                        <button onClick={() => transcribeAudio('ar')}
+                        <button onClick={() => transcription.trim() ? translateExistingText() : transcribeAudio('ar')}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-[#ff4e00]/10 border border-[#ff4e00]/25 rounded-lg text-[10px] uppercase tracking-wider hover:bg-[#ff4e00]/20 text-[#ff4e00] transition-colors font-bold"
                         >وەرگێڕان بۆ عەرەبی</button>
                       )}
@@ -1414,22 +1447,6 @@ export default function App() {
                                   <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>{sub}</span>
                                 </button>
                               ))}
-                              {audioBlob && (
-                                <div style={{ borderTop: '1px solid var(--border-soft)' }}>
-                                  <p className="px-4 pt-2.5 pb-1 text-[9px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-faint)' }}>ژێرنووس</p>
-                                  {(['srt', 'vtt'] as const).map(fmt => (
-                                    <button key={fmt} onClick={() => exportSubtitles(fmt)} disabled={isExportingSubtitles}
-                                      className="w-full flex flex-col items-start px-4 py-2.5 text-right hover:bg-[#22d3ee]/08 transition-colors border-b border-[#ffffff06] last:border-0 disabled:opacity-50"
-                                    >
-                                      <span className="text-xs text-[#22d3ee] font-medium flex items-center gap-1.5">
-                                        {isExportingSubtitles ? <Loader2 size={10} className="animate-spin" /> : null}
-                                        دابگرە بە .{fmt.toUpperCase()}
-                                      </span>
-                                      <span className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>{fmt === 'srt' ? 'بۆ زۆربەی پلەیەرەکان' : 'بۆ وێب و یوتیوب'}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
                             </motion.div>
                           )}
                         </AnimatePresence>
@@ -1467,57 +1484,29 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  {/* Karaoke toggle / loading indicator */}
-                  <div className="px-5 sm:px-7 pt-4 flex items-center gap-2" dir="ltr">
-                    {isTimedTranscribing && timedWords.length === 0 && (
-                      <span className="flex items-center gap-1.5 text-[10px] tracking-wider" style={{ color: 'var(--text-dim)' }}>
-                        <Loader2 size={11} className="animate-spin text-[#ff4e00]" />
-                        هایلایت ئامادەدەبێت...
-                      </span>
-                    )}
-                    {timedWords.length > 0 && (
-                      <>
-                        <button
-                          onClick={() => setShowTimedView(false)}
-                          className={`px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${!showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
-                          style={showTimedView ? { color: 'var(--text-muted)' } : undefined}
-                        >تێکستی ئاسایی</button>
-                        <button
-                          onClick={() => setShowTimedView(true)}
-                          className={`px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40 hover:text-[#ff4e00]'}`}
-                          style={showTimedView ? undefined : { color: 'var(--text-muted)' }}
-                        >🎵 هایلایتی دەنگ</button>
-                      </>
-                    )}
-                  </div>
-
+                  {/* Karaoke toggle — only shown when word timestamps are available */}
+                  {!isTranscribing && timedWords.length > 0 && (
+                    <div className="px-5 sm:px-7 pt-2 pb-1 flex items-center gap-2" dir="ltr">
+                      <button
+                        onClick={() => setShowTimedView(false)}
+                        className={`px-3 py-1 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${!showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40'}`}
+                        style={showTimedView ? { color: 'var(--text-muted)' } : undefined}
+                      >تێکستی ئاسایی</button>
+                      <button
+                        onClick={() => {
+                          const el = audioElRef.current;
+                          if (el) el.currentTime = 0;
+                          setCurrentPct(0);
+                          setShowTimedView(true);
+                        }}
+                        className={`px-3 py-1 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all ${showTimedView ? 'bg-[#ff4e00] text-white' : 'border border-[#ffffff10] hover:border-[#ff4e00]/40'}`}
+                        style={showTimedView ? undefined : { color: 'var(--text-muted)' }}
+                      >🎵 هایلایتی دەنگ</button>
+                    </div>
+                  )}
                   <div className="px-5 sm:px-7 py-6 min-h-[120px]">
                     {showTimedView && timedWords.length > 0 ? (
-                      <div className="text-xl sm:text-2xl md:text-3xl leading-[2.6] text-right" dir="rtl">
-                        {timedWords.map((w, i) => {
-                          const t = audioDuration > 0 ? (currentPct / 100) * audioDuration : -1;
-                          const active = t >= w.start && t < w.end;
-                          const past = t >= w.end;
-                          return (
-                            <span
-                              key={i}
-                              ref={active ? (el => { el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }) : undefined}
-                              onClick={() => {
-                                const el = audioElRef.current;
-                                if (el) el.currentTime = w.start;
-                              }}
-                              className="cursor-pointer inline-block transition-all duration-150 rounded mx-[1px]"
-                              style={
-                                active
-                                  ? { background: '#ff4e00', color: '#fff', padding: '0 5px', borderRadius: '5px', transform: 'scale(1.06)' }
-                                  : past
-                                  ? { color: 'var(--text-muted)', padding: '0 2px' }
-                                  : { color: 'var(--text-primary)', padding: '0 2px' }
-                              }
-                            >{w.word}</span>
-                          );
-                        })}
-                      </div>
+                      <KaraokeView words={timedWords} audioRef={audioElRef} currentPct={currentPct} />
                     ) : isEditingTranscription ? (
                       <textarea
                         ref={editableRef}

@@ -33,8 +33,47 @@ export const ISLAMIC_TEXT_DETECTION_RULE = `
 If the speaker recites a Quran ayah or quotes a Hadith, do NOT transcribe it phonetically into Kurdish-adjacent script. Instead:
 - For a Quran ayah: wrap it as <quran surah="EnglishSurahName" ayah="N">the recited Arabic text with your best-effort diacritics</quran> — use the surah's English name (e.g. "Al-Faatiha", "Al-Baqara", "Al-Ikhlaas") and your best guess at the ayah number.
 - For a Hadith: wrap it as <hadith narrator="Name in Arabic or English">the recited Arabic text</hadith> — use the narrator or collection name if mentioned (e.g. "البخاري", "مسلم"), or "نامشخص" if unclear.
+- CRITICAL — completeness: if the speaker recites MULTIPLE consecutive ayahs or a multi-sentence Hadith, you MUST capture the ENTIRE recitation inside the tag, word for word, from its first to its very last spoken syllable. Never tag only part of what was recited and leave the rest untagged or omitted — listen to the full recitation before closing the tag. When a recitation spans more than one ayah, either include the full span inside one <quran> tag (use the starting ayah's number) or emit one consecutive <quran> tag per ayah — never drop or truncate any spoken ayah in between.
 - Only tag actual Quran/Hadith recitation, not ordinary Arabic words or phrases used in everyday Kurdish speech.
-- Everything else stays as normal Kurdish transcription, untouched.`;
+- Everything else stays as normal Kurdish transcription, untouched — do not lose any spoken content, religious or otherwise.`;
+
+/**
+ * Runs a cheap, text-only Gemini pass over an already-transcribed Kurdish transcript
+ * to detect and tag any Quran/Hadith recitation with <quran>/<hadith> markup, for
+ * transcription paths that couldn't apply ISLAMIC_TEXT_DETECTION_RULE during the
+ * original audio call itself (e.g. ElevenLabs Scribe's plain ASR output, or a
+ * word-timestamp transcription pass that intentionally skips citation tagging to
+ * keep its own output format simple). Returns the input unchanged on any failure —
+ * tagging is a nice-to-have annotation, never a reason to lose the transcript.
+ */
+export async function tagIslamicCitations(ai: GoogleGenAI, text: string): Promise<string> {
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+  // Only run the Gemini pass when the text contains Arabic DIACRITIC marks (harakat /
+  // tashkeel — U+064B-U+065F, U+0670, U+06D6-U+06ED). Kurdish Sorani orthography
+  // never uses these marks; they appear in the model's output only when it transcribes
+  // formally-recited classical Arabic (Quran, Hadith). A simple Arabic-Unicode-range
+  // check won't work because Kurdish itself is also written in the Arabic Unicode block.
+  const diacriticCount = (trimmed.match(/[ً-ٰٟۖ-ۭ]/g) || []).length;
+  if (diacriticCount < 3) return text;
+
+  try {
+    const tagPrompt = `The following is a Kurdish (Sorani) speech transcript. If any part of it is a recited Quran ayah or Hadith quotation, mark it using the rules below. Return the FULL text unchanged otherwise — do not translate, summarize, or alter any other wording.${ISLAMIC_TEXT_DETECTION_RULE}
+
+Transcript:
+${trimmed}`;
+    const tagRes = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
+      contents: tagPrompt,
+    });
+    const tagged = (tagRes.text || "").trim();
+    return tagged || text;
+  } catch (e) {
+    console.warn("[islamicTextVerifier] Citation tagging pass failed, keeping untagged text:", e);
+    return text;
+  }
+}
 
 const ALQURAN_BASE = "https://api.alquran.cloud/v1";
 
@@ -184,36 +223,46 @@ async function lookupHadithViaSearch(ai: GoogleGenAI, arabicText: string): Promi
 
 /**
  * Rewrites every <quran> tag with the verified, fully-diacritized ayah text and
- * citation (marking verified="true"/"false"), and — when a GoogleGenAI client is
+ * citation (marking verified="true"), and — when a GoogleGenAI client is
  * provided — every <hadith> tag with a search-grounded narrator/collection (same
  * verified attribute). Without an ai client, <hadith> tags pass through unverified.
- * Network/API failures fail open (tag left as-is, unverified).
+ * A <quran> tag that can't be matched against AlQuran Cloud usually means the model
+ * only captured a fragment of the ayah (or mis-cited the surah/number), so it's
+ * unwrapped back to plain recited text instead of being shown as an unconfirmed
+ * citation. Network/API failures fail open (tag left as-is, unverified).
  */
 export async function verifyAndAnnotate(text: string, ai?: GoogleGenAI): Promise<string> {
   let result = text;
 
+  // Each citation's verification is an independent network round-trip (AlQuran Cloud
+  // / Google Search) — run them concurrently instead of one-at-a-time, then apply the
+  // string replacements sequentially afterward (cheap/synchronous, and preserves
+  // correct behavior when the same citation text appears more than once: each
+  // replacement only ever touches the next remaining occurrence).
   const quranMatches = [...text.matchAll(QURAN_TAG_RE)];
-  for (const match of quranMatches) {
+  const quranReplacements = await Promise.all(quranMatches.map(async (match) => {
     const [fullTag, surahHint, ayahHint, innerText] = match;
     const verified = await resolveAyah(surahHint, ayahHint, innerText);
-
     const replacement = verified
       ? `<quran surah="${verified.surahNameArabic}" ayah="${verified.ayahNumber}" verified="true">${verified.text}</quran>`
-      : fullTag.replace('<quran ', '<quran verified="false" ');
-
+      : innerText;
+    return { fullTag, replacement };
+  }));
+  for (const { fullTag, replacement } of quranReplacements) {
     result = result.replace(fullTag, replacement);
   }
 
   if (ai) {
     const hadithMatches = [...text.matchAll(HADITH_TAG_RE)];
-    for (const match of hadithMatches) {
+    const hadithReplacements = await Promise.all(hadithMatches.map(async (match) => {
       const [fullTag, , innerText] = match;
       const looked = await lookupHadithViaSearch(ai, innerText);
-
       const replacement = looked?.confident
         ? `<hadith narrator="${looked.narrator}" verified="true">${innerText}</hadith>`
         : fullTag.replace('<hadith ', '<hadith verified="false" ');
-
+      return { fullTag, replacement };
+    }));
+    for (const { fullTag, replacement } of hadithReplacements) {
       result = result.replace(fullTag, replacement);
     }
   }
