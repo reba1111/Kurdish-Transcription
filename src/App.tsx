@@ -188,7 +188,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [cookieError, setCookieError] = useState(false);
   const [targetLanguage, setTargetLanguage] = useState<'ku' | 'ar'>('ku');
-  const [selectedModel, setSelectedModel] = useState<'gemini-pro' | 'gemini' | 'gemini-flash2' | 'scribe'>('gemini-pro');
+  const [selectedModel, setSelectedModel] = useState<'gemini-pro' | 'gemini' | 'gemini-flash2' | 'scribe' | 'custom'>('gemini-pro');
+  const [customApiUrl, setCustomApiUrl] = useState('');
+  const [customApiKey, setCustomApiKey] = useState('');
   const [shouldCompress, setShouldCompress] = useState(true);
   const [activeTab, setActiveTab] = useState<'transcribe' | 'library' | 'hadith-search' | 'arabic-grammar' | 'profile'>('transcribe');
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -475,6 +477,10 @@ export default function App() {
       formData.append("language", langToUse);
       formData.append("model", selectedModel);
       formData.append("compress", compress ? "true" : "false");
+      if (selectedModel === 'custom') {
+        formData.append("customApiUrl", customApiUrl);
+        formData.append("customApiKey", customApiKey);
+      }
 
       const response = await fetch("/api/transcribe", { method: "POST", body: formData, signal: ac.signal });
 
@@ -1135,9 +1141,34 @@ export default function App() {
                       <option value="gemini" className="bg-card">Gemini 2.5 Flash</option>
                       <option value="gemini-flash2" className="bg-card">Gemini 2.5 Flash (Fast)</option>
                       <option value="scribe" className="bg-card">ElevenLabs Scribe</option>
+                      <option value="custom" className="bg-card">⚙️ Custom API (Whisper)</option>
                     </select>
                     <ChevronDown size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-dim)' }} />
                   </div>
+                  {/* Custom API fields — shown only when custom model is selected */}
+                  {selectedModel === 'custom' && (
+                    <div className="flex flex-col gap-2 mt-1" dir="ltr">
+                      <input
+                        type="url"
+                        placeholder="API Base URL (e.g. https://api.openai.com)"
+                        value={customApiUrl}
+                        onChange={e => setCustomApiUrl(e.target.value)}
+                        className="w-full text-xs px-3 py-2 rounded-lg outline-none"
+                        style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
+                      />
+                      <input
+                        type="password"
+                        placeholder="API Key (optional)"
+                        value={customApiKey}
+                        onChange={e => setCustomApiKey(e.target.value)}
+                        className="w-full text-xs px-3 py-2 rounded-lg outline-none"
+                        style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
+                      />
+                      <p className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                        هەر OpenAI-compatible endpoint — OpenAI، Groq، Whisper لۆکال
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Compress */}

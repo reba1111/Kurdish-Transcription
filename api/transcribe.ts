@@ -67,7 +67,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const speechSegments = null;
     const trimResult = { filePath: audioFile.filepath, segments: null, durationSeconds: 0 };
 
+    // Extract optional custom API credentials sent from the client
+    const customApiUrl = (Array.isArray(fields.customApiUrl) ? fields.customApiUrl[0] : fields.customApiUrl) || "";
+    const customApiKey = (Array.isArray(fields.customApiKey) ? fields.customApiKey[0] : fields.customApiKey) || "";
+
     try {
+    // CUSTOM WHISPER-COMPATIBLE API PATH
+    // Supports any OpenAI-compatible /v1/audio/transcriptions endpoint
+    // (OpenAI, Groq, local Whisper, etc.) — URL and key come from the client.
+    if (selectedModel === "custom" && customApiUrl) {
+      const whisperForm = new FormData();
+      const blob = new Blob([fileBuffer], { type: mimeType });
+      const ext = mimeType.includes("mp4") ? "mp4" : mimeType.includes("ogg") ? "ogg" : mimeType.includes("webm") ? "webm" : "mp3";
+      whisperForm.append("file", blob, `audio.${ext}`);
+      whisperForm.append("model", "whisper-1");
+      whisperForm.append("language", targetLanguage === "ar" ? "ar" : "ku");
+      whisperForm.append("response_format", "verbose_json");
+      whisperForm.append("timestamp_granularities[]", "word");
+
+      const headers: Record<string, string> = {};
+      if (customApiKey) headers["Authorization"] = `Bearer ${customApiKey}`;
+
+      const apiRes = await fetch(`${customApiUrl.replace(/\/$/, "")}/v1/audio/transcriptions`, {
+        method: "POST",
+        headers,
+        body: whisperForm,
+      });
+
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        throw new Error(errData?.error?.message || `Custom API error ${apiRes.status}`);
+      }
+
+      const data = await apiRes.json();
+      let finalText: string = data.text || "";
+
+      // Extract word-level timestamps if available
+      const wordTimestamps: TimedWord[] = (data.words || [])
+        .filter((w: any) => w.word && typeof w.start === "number")
+        .map((w: any) => ({ word: w.word, start: w.start, end: w.end ?? w.start + 0.3 }));
+
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Transfer-Encoding", "chunked");
+      if (wordTimestamps.length > 0) {
+        res.write(formatWordsMarker(wordTimestamps));
+      }
+      res.write(finalText);
+      return res.end();
+    }
+
     // SCRIBE PATH
     if (selectedModel === "scribe") {
       if (!process.env.ELEVENLABS_API_KEY) {
