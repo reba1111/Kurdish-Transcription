@@ -67,6 +67,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // any model sees the file — every downstream path uses this effective file/buffer/
     // mimeType instead of the raw upload. trimSilence fails open (returns the original
     // file untouched) on any detection/encode error.
+    // Keep the original buffer before trimming so word-timestamp calls can use
+    // the untrimmed audio — Gemini timestamps must match what the browser plays.
+    const originalBuffer = fs.readFileSync(audioFile.filepath);
+    const originalMimeType = mimeType;
+
     const trimResult = await trimSilence(audioFile.filepath);
     const effectiveFilePath = trimResult.filePath;
     const speechSegments = trimResult.segments;
@@ -231,11 +236,14 @@ Strict rules — follow every one without exception:
       }
     }
 
+    // Transcript audio: trimmed (silence removed) to save API cost.
     const audioPart = {
-      inlineData: {
-        mimeType,
-        data: fileBuffer.toString("base64"),
-      },
+      inlineData: { mimeType, data: fileBuffer.toString("base64") },
+    };
+    // Timestamp audio: always the original untrimmed file so Gemini's reported
+    // offsets match what the browser is actually playing back.
+    const audioPartOriginal = {
+      inlineData: { mimeType: originalMimeType, data: originalBuffer.toString("base64") },
     };
 
     let lastError: any = null;
@@ -245,11 +253,7 @@ Strict rules — follow every one without exception:
       let text = "";
       let usedModel = "";
 
-      // Use structured JSON output (responseSchema) for single-shot audio — the schema
-      // forces Gemini to emit a valid { word, start, end }[] array rather than free text,
-      // which produces far more accurate and consistent timestamps than the line-delimited
-      // format. temperature:0.1 keeps the transcription deterministic while allowing
-      // the model just enough freedom to find the correct word boundaries.
+      // Pass 1 — transcript from trimmed audio (cheaper, no silence to process)
       for (const modelName of models) {
         try {
           const result = await ai.models.generateContent({
@@ -264,12 +268,10 @@ Strict rules — follow every one without exception:
           });
           const parsed = parseWordTimestampJSON(result.text || "");
           if (looksLikeValidWordList(parsed, durationSeconds)) {
-            words = parsed;
             text = wordsToText(parsed);
             usedModel = modelName;
             break;
           }
-          // Schema output didn't yield a valid word list — fall through to line-format retry
           console.warn(`[Transcribe] ${modelName} JSON schema output invalid, retrying with line format`);
           const lineResult = await ai.models.generateContent({
             model: modelName,
@@ -278,7 +280,6 @@ Strict rules — follow every one without exception:
           });
           const lineParsed = parseWordTimestampLines(lineResult.text || "");
           if (looksLikeValidWordList(lineParsed, durationSeconds)) {
-            words = lineParsed;
             text = wordsToText(lineParsed);
             usedModel = modelName;
             break;
@@ -294,7 +295,32 @@ Strict rules — follow every one without exception:
         }
       }
 
-      // Every attempt failed — fall back to plain prose so we still return a transcript.
+      // Pass 2 — word timestamps from ORIGINAL (untrimmed) audio for accurate karaoke sync.
+      // When no trimming occurred reuse the same audio part (no extra API call).
+      if (text) {
+        const tsAudioPart = speechSegments ? audioPartOriginal : audioPart;
+        const tsDuration = speechSegments
+          ? trimResult.durationSeconds + speechSegments.reduce((s, seg) => s + (seg.origEnd - seg.origStart - (seg.trimmedEnd - seg.trimmedStart)), 0)
+          : durationSeconds;
+        try {
+          const tsResult = await ai.models.generateContent({
+            model: usedModel || models[0],
+            config: {
+              temperature: 0.1,
+              systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION,
+              responseSchema: WORD_TIMESTAMP_SCHEMA,
+              responseMimeType: "application/json",
+            },
+            contents: [{ parts: [tsAudioPart, { text: WORD_TIMESTAMP_PROMPT_JSON }] }],
+          });
+          const tsWords = parseWordTimestampJSON(tsResult.text || "");
+          if (looksLikeValidWordList(tsWords, tsDuration)) words = tsWords;
+        } catch (e) {
+          console.warn("[Transcribe] Timestamp pass on original audio failed, skipping karaoke:", e);
+        }
+      }
+
+      // Fallback prose if both word-timestamp passes failed
       if (!text) {
         try {
           const result = await ai.models.generateContent({
@@ -324,7 +350,6 @@ Strict rules — follow every one without exception:
           });
           const proWords = parseWordTimestampJSON(proResult.text || "");
           if (looksLikeValidWordList(proWords, durationSeconds)) {
-            words = proWords;
             text = wordsToText(proWords);
             taggedText = await tagIslamicCitations(ai, text);
           }
@@ -335,14 +360,12 @@ Strict rules — follow every one without exception:
 
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.setHeader("Transfer-Encoding", "chunked");
-
       if (/<quran |<hadith /.test(taggedText)) {
         res.write(formatVerifyingSourcesMarker());
       }
       const annotated = await verifyAndAnnotate(taggedText, ai);
       if (words.length > 0) {
-        const originalTimeWords = speechSegments ? remapWordsToOriginalTime(words, speechSegments) : words;
-        res.write(formatWordsMarker(originalTimeWords));
+        res.write(formatWordsMarker(words));
       }
       res.write(annotated);
       res.end();
