@@ -9,14 +9,23 @@ export const CHUNK_THRESHOLD_SECONDS = 5 * 60; // 5 minutes
 export const CHUNK_LENGTH_SECONDS = 5 * 60; // each chunk covers 5 minutes of new content
 export const CHUNK_OVERLAP_SECONDS = 5; // shared tail/head between consecutive chunks
 
-// Out-of-band progress marker embedded in the streamed transcript response so the
-// client can show "transcribing chunk X of Y" without it leaking into the visible
-// text. Uses a NUL byte delimiter, which never appears in normal transcript text.
+// Out-of-band progress markers embedded in the streamed transcript response so the
+// client can show progress text ("transcribing chunk X of Y", "extracting sources...")
+// without it leaking into the visible text. Uses a NUL byte delimiter, which never
+// appears in normal transcript text.
 const PROGRESS_MARKER_DELIM = String.fromCharCode(0);
 export const CHUNK_PROGRESS_MARKER_RE = new RegExp(`${PROGRESS_MARKER_DELIM}CHUNK_PROGRESS:(\\d+)/(\\d+)${PROGRESS_MARKER_DELIM}`, "g");
+export const VERIFYING_SOURCES_MARKER_RE = new RegExp(`${PROGRESS_MARKER_DELIM}VERIFYING_SOURCES${PROGRESS_MARKER_DELIM}`, "g");
 
 export function formatChunkProgressMarker(index: number, total: number): string {
   return `${PROGRESS_MARKER_DELIM}CHUNK_PROGRESS:${index + 1}/${total}${PROGRESS_MARKER_DELIM}`;
+}
+
+/** Emitted right before the server starts verifying Quran/Hadith citations
+ * (AlQuran Cloud lookup + Google Search Grounding), which adds noticeable latency
+ * on top of the transcription itself. */
+export function formatVerifyingSourcesMarker(): string {
+  return `${PROGRESS_MARKER_DELIM}VERIFYING_SOURCES${PROGRESS_MARKER_DELIM}`;
 }
 
 export interface AudioChunk {

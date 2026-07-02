@@ -4,8 +4,9 @@ import formidable from "formidable";
 import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, probeDurationSeconds } from "../lib/audioChunker";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, probeDurationSeconds } from "../lib/audioChunker";
 import { transcribeLongAudio } from "../lib/chunkedTranscription";
+import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, verifyAndAnnotate } from "../lib/islamicTextVerifier";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -98,8 +99,8 @@ DIACRITICS (تشكيل):
 Return ONLY the final fully-vowelled Arabic text — no explanations, no markdown, no HTML.`;
 
         const arPrompt = finalOutput.trim()
-          ? `${arBaseRules}\n\nTranslate this Kurdish Sorani text into Arabic:\n${finalOutput}`
-          : `${arBaseRules}\n\nListen to the Kurdish (Sorani) audio and translate it directly into Arabic.`;
+          ? `You are a professional Arabic translator with deep expertise in Kurdish (Sorani) to Arabic translation.\nTranslate the following Kurdish Sorani text into flawless Modern Standard Arabic (Fusha/MSA).\nRules:\n- Preserve the original meaning, tone, and nuance precisely — do not add or omit anything.\n- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).\n- Choose the most contextually appropriate Arabic word for each Kurdish term.\n- Transliterate proper nouns correctly.\n- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.\n\nKurdish text:\n${finalOutput}`
+          : `You are a professional Arabic translator. Listen to the Kurdish (Sorani) audio and translate it directly into flawless Modern Standard Arabic (Fusha/MSA).\nRules:\n- Preserve the original meaning, tone, and nuance precisely — do not add or omit anything.\n- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).\n- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.`;
 
         const chatRes = await ai.models.generateContent({
           model: "gemini-2.5-flash",
@@ -110,6 +111,29 @@ Return ONLY the final fully-vowelled Arabic text — no explanations, no markdow
           .replace(/```/g, "")
           .replace(/<[^>]*>?/gm, "")
           .trim();
+      } else if (process.env.GEMINI_API_KEY && finalOutput.trim()) {
+        // Scribe is a plain ASR — it can't follow tagging instructions itself, so give
+        // its Kurdish output a quick Gemini pass to detect/tag any Quran or Hadith
+        // recitation, then verify the Quran citations. Only worth the extra call when
+        // the output actually contains a meaningful chunk of Arabic script.
+        const arabicCharCount = (finalOutput.match(/[؀-ۿ]/g) || []).length;
+        if (arabicCharCount > 10) {
+          try {
+            const tagPrompt = `The following is a Kurdish (Sorani) speech transcript. If any part of it is a recited Quran ayah or Hadith quotation, mark it using the rules below. Return the FULL text unchanged otherwise — do not translate, summarize, or alter any other wording.${ISLAMIC_TEXT_DETECTION_RULE}
+
+Transcript:
+${finalOutput}`;
+            const tagRes = await ai.models.generateContent({
+              model: "gemini-2.5-flash",
+              config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
+              contents: tagPrompt,
+            });
+            const tagged = (tagRes.text || "").trim();
+            if (tagged) finalOutput = await verifyAndAnnotate(tagged, ai);
+          } catch (e) {
+            console.warn("[Scribe] Quran/Hadith tagging pass failed, keeping raw output:", e);
+          }
+        }
       }
 
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -123,36 +147,16 @@ Return ONLY the final fully-vowelled Arabic text — no explanations, no markdow
 
     const promptText =
       targetLanguage === "ar"
-        ? `You are a master Arabic linguist and translator specialising in Kurdish (Sorani) to Arabic. Listen to the Kurdish (Sorani) audio and produce a fully-vowelled (مُشَكَّل), grammatically impeccable Modern Standard Arabic (الفصحى) translation.
+        ? `You are a professional Arabic translator and linguist with deep expertise in Kurdish (Sorani) to Arabic translation. Listen to the Kurdish (Sorani) audio carefully and produce a flawless, publication-quality Arabic translation.
 
-Strict linguistic rules — follow every one without exception:
-
-GRAMMAR & SYNTAX (نحو):
-- Apply full iʿrāb (إعراب) case endings: ضمة رفع، فتحة نصب، كسرة جر، سكون جزم
-- Correctly mark tanwīn (تنوين) where indefinite: ـً ـٍ ـٌ
-- Use the correct definite article (ال) with proper assimilation for sun letters (حروف شمسية)
-- Ensure subject–verb agreement in gender (مذكر/مؤنث) and number (مفرد/مثنى/جمع)
-- Use the dual (مثنى) and broken plurals (جمع تكسير) correctly
-- Apply proper verb conjugations: tense (ماضٍ/مضارع/أمر), voice (معلوم/مجهول), and mood (رفع/نصب/جزم)
-
-MORPHOLOGY (صرف):
-- Derive words from the correct Arabic root (جذر ثلاثي أو رباعي)
-- Choose the appropriate morphological pattern (وزن صرفي): فَعَلَ، فَعَّلَ، أَفْعَلَ، انْفَعَلَ، إلخ
-- Use correct broken plural patterns: فُعُول، أَفْعَال، فِعَال، فُعَلَاء، إلخ
-- Apply proper feminine markers (تاء مربوطة، ألف مقصورة)
-- Correctly handle hamza (همزة الوصل vs همزة القطع)
-
-DIACRITICS (شكل/تشكيل):
-- Place full short vowels (حركات) on every word: فَتْحَة، كَسْرَة، ضَمَّة، سُكُون، شَدَّة
-- Tanwīn on indefinite nouns/adjectives
-- Shadda (شدَّة) on all geminate consonants
-
-STYLE:
-- Produce natural, flowing Arabic — not a word-for-word translation
-- Preserve rhetorical devices, emphasis, and tone from the original
-- Transliterate proper nouns and names faithfully into Arabic script
-
-Return ONLY the final fully-vowelled Arabic text — no explanations, no markdown, no HTML, no transliteration.`
+Rules:
+- Translate into Modern Standard Arabic (Fusha/MSA) with rich, natural vocabulary.
+- Preserve the original meaning, tone, and nuance precisely — do not add or omit any content.
+- Use proper Arabic grammar, correct verb conjugations, and accurate case endings (إعراب).
+- Choose the most contextually appropriate Arabic word for each Kurdish term.
+- Maintain the flow and rhythm of the original speech — do not make it sound robotic.
+- Transliterate proper nouns and names correctly into Arabic script.
+- Return ONLY the final Arabic translation — no explanations, no markdown, no HTML.`
         : `You are an expert Kurdish (Sorani) speech transcriber. Your task is to produce a perfectly faithful transcription of the spoken audio in Kurdish Sorani script.
 
 Strict rules — follow every one without exception:
@@ -166,7 +170,7 @@ Strict rules — follow every one without exception:
    - ڤ vs. ف and ق vs. ک where needed
 4. Preserve natural sentence boundaries and punctuation (. ، ؟ !)
 5. Do NOT translate, summarize, or paraphrase — only transcribe.
-6. Return ONLY the plain transcribed text — no markdown, no HTML, no labels, no explanations.`;
+6. Return ONLY the plain transcribed text — no markdown, no HTML, no labels, no explanations.${ISLAMIC_TEXT_DETECTION_RULE}`;
 
 
     const models = selectedModel === 'gemini-pro'
@@ -194,10 +198,12 @@ Strict rules — follow every one without exception:
           mimeType,
           models,
           promptText,
+          useIslamicSystemPrompt: targetLanguage === "ku",
           onChunkStart: (index, total) => {
             console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
             res.write(formatChunkProgressMarker(index, total));
           },
+          onVerifyingStart: () => res.write(formatVerifyingSourcesMarker()),
           onChunkText: (text) => res.write(text),
         });
         return res.end();
@@ -219,13 +225,32 @@ Strict rules — follow every one without exception:
       try {
         const responseStream = await ai.models.generateContentStream({
           model: modelName,
-          config: { temperature: 0 },
+          config: {
+            temperature: 0,
+            ...(targetLanguage === "ku" ? { systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION } : {}),
+          },
           contents: [{ parts: [audioPart, { text: promptText }] }],
         });
 
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.setHeader("Transfer-Encoding", "chunked");
 
+        if (targetLanguage === "ku") {
+          // Buffer the full response so a Quran/Hadith tag never gets cut mid-stream,
+          // then verify ayah citations against AlQuran Cloud before sending.
+          let fullText = "";
+          for await (const chunk of responseStream) {
+            if (chunk.text) fullText += chunk.text;
+          }
+          if (/<quran |<hadith /.test(fullText)) {
+            res.setHeader("Transfer-Encoding", "chunked");
+            res.write(formatVerifyingSourcesMarker());
+          }
+          const annotated = await verifyAndAnnotate(fullText, ai);
+          res.end(annotated);
+          return;
+        }
+
+        res.setHeader("Transfer-Encoding", "chunked");
         for await (const chunk of responseStream) {
           if (chunk.text) res.write(chunk.text);
         }

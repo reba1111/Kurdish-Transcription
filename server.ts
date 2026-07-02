@@ -9,8 +9,11 @@ import os from "os";
 import crypto from "crypto";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, probeDurationSeconds } from "./lib/audioChunker";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, probeDurationSeconds } from "./lib/audioChunker";
 import { transcribeLongAudio } from "./lib/chunkedTranscription";
+import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, verifyAndAnnotate } from "./lib/islamicTextVerifier";
+import { searchHadithByMeaning } from "./lib/hadithSearch";
+import { correctArabicGrammar } from "./lib/arabicGrammarCorrector";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -138,8 +141,31 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
           contents: arPrompt
         });
         finalOutput = (chatRes.text || finalOutput).replace(/```[a-z]*\n?/g, '').replace(/```/g, '').replace(/<[^>]*>?/gm, '').trim();
+      } else if (process.env.GEMINI_API_KEY && finalOutput.trim()) {
+        // Scribe is a plain ASR — it can't follow tagging instructions itself, so give
+        // its Kurdish output a quick Gemini pass to detect/tag any Quran or Hadith
+        // recitation, then verify the Quran citations. Only worth the extra call when
+        // the output actually contains a meaningful chunk of Arabic script.
+        const arabicCharCount = (finalOutput.match(/[؀-ۿ]/g) || []).length;
+        if (arabicCharCount > 10) {
+          try {
+            const tagPrompt = `The following is a Kurdish (Sorani) speech transcript. If any part of it is a recited Quran ayah or Hadith quotation, mark it using the rules below. Return the FULL text unchanged otherwise — do not translate, summarize, or alter any other wording.${ISLAMIC_TEXT_DETECTION_RULE}
+
+Transcript:
+${finalOutput}`;
+            const tagRes = await ai.models.generateContent({
+              model: "gemini-2.5-flash",
+              config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
+              contents: tagPrompt,
+            });
+            const tagged = (tagRes.text || "").trim();
+            if (tagged) finalOutput = await verifyAndAnnotate(tagged, ai);
+          } catch (e) {
+            console.warn("[Scribe] Quran/Hadith tagging pass failed, keeping raw output:", e);
+          }
+        }
       }
-      
+
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.send(finalOutput);
       return;
@@ -161,7 +187,7 @@ Rules:
 - Maintain the flow and rhythm of the original speech — do not make it sound robotic
 - If a proper noun or name appears, transliterate it correctly into Arabic
 - Return ONLY the final Arabic translation — no explanations, no markdown, no HTML`
-      : "You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.";
+      : `You are an expert transcriber. Transcribe the spoken Kurdish audio highly accurately using Kurdish script. Ensure correct spelling and grammar. Return ONLY the pure transcribed text, without markdown or html tags.${ISLAMIC_TEXT_DETECTION_RULE}`;
 
     const models = selectedModel === 'gemini-pro'
       ? ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]
@@ -190,10 +216,12 @@ Rules:
           mimeType: finalMimeType,
           models,
           promptText,
+          useIslamicSystemPrompt: targetLanguage === 'ku',
           onChunkStart: (index, total) => {
             console.log(`[Chunking] transcribing chunk ${index + 1}/${total}`);
             res.write(formatChunkProgressMarker(index, total));
           },
+          onVerifyingStart: () => res.write(formatVerifyingSourcesMarker()),
           onChunkText: (text) => res.write(text),
         });
         res.end();
@@ -217,13 +245,32 @@ Rules:
       try {
         const responseStream = await ai.models.generateContentStream({
           model: modelName,
-          config: { temperature: 0 },
+          config: {
+            temperature: 0,
+            ...(targetLanguage === 'ku' ? { systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION } : {}),
+          },
           contents: [{ parts: [audioPart, { text: promptText }] }],
         });
 
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.setHeader("Transfer-Encoding", "chunked");
 
+        if (targetLanguage === 'ku') {
+          // Buffer the full response so a Quran/Hadith tag never gets cut mid-stream,
+          // then verify ayah citations against AlQuran Cloud before sending.
+          let fullText = "";
+          for await (const chunk of responseStream) {
+            if (chunk.text) fullText += chunk.text;
+          }
+          if (/<quran |<hadith /.test(fullText)) {
+            res.setHeader("Transfer-Encoding", "chunked");
+            res.write(formatVerifyingSourcesMarker());
+          }
+          const annotated = await verifyAndAnnotate(fullText, ai);
+          res.end(annotated);
+          return;
+        }
+
+        res.setHeader("Transfer-Encoding", "chunked");
         for await (const chunk of responseStream) {
           if (chunk.text) res.write(chunk.text);
         }
@@ -359,6 +406,43 @@ app.post("/api/summarize", async (req, res) => {
     console.error("Summarize error:", error);
     if (!res.headersSent) res.status(500).json({ error: error.message || "Failed to summarize" });
     else res.end();
+  }
+});
+
+// API route for semantic Hadith search: user describes a Hadith in Kurdish, Gemini
+// identifies it, and the result is verified against hadithapi.com before being returned.
+app.post("/api/hadith-search", async (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query?.trim()) return res.status(400).json({ error: "هیچ دەقێک نەنێردراوە." });
+    if (typeof query !== 'string' || query.length > 1000) return res.status(400).json({ error: "دەقەکە زۆر درێژە." });
+    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "GEMINI_API_KEY نەخوێندراوەتەوە." });
+
+    if (!process.env.HADITH_API_KEY) {
+      console.warn("[hadith-search] HADITH_API_KEY not set — results will be unverified.");
+    }
+
+    const results = await searchHadithByMeaning(ai, query, process.env.HADITH_API_KEY);
+    res.status(200).json({ results });
+  } catch (error: any) {
+    console.error("Hadith search error:", error);
+    res.status(500).json({ error: error.message || "گەڕانەکە سەرکەوتوو نەبوو." });
+  }
+});
+
+// API route for Arabic grammar/syntax/spelling correction with a detailed error report.
+app.post("/api/grammar-check", async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text?.trim()) return res.status(400).json({ error: "هیچ دەقێک نەنێردراوە." });
+    if (typeof text !== 'string' || text.length > 10000) return res.status(400).json({ error: "دەقەکە زۆر درێژە." });
+    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "GEMINI_API_KEY نەخوێندراوەتەوە." });
+
+    const result = await correctArabicGrammar(ai, text);
+    res.status(200).json(result);
+  } catch (error: any) {
+    console.error("Arabic grammar correction error:", error);
+    res.status(500).json({ error: error.message || "پشکنینەکە سەرکەوتوو نەبوو." });
   }
 });
 
