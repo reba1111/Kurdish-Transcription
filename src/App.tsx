@@ -478,13 +478,23 @@ export default function App() {
             lastIndex = combinedMarkerRe.lastIndex;
           }
           const rest = pending.slice(lastIndex);
+          // Hold back if there's either a partial NUL-delimited marker or an
+          // open <quran / <hadith tag that hasn't been closed yet — otherwise
+          // the raw opening tag leaks into the rendered transcript.
           const partialMarkerStart = rest.indexOf(CHUNK_PROGRESS_NUL);
-          if (partialMarkerStart === -1 || done) {
+          const openTagMatch = rest.match(/<(quran|hadith)(?![^>]*\/>)[^>]*(?:>(?![\s\S]*<\/\1>)|$)/);
+          if (done) {
             visible += rest;
             pending = "";
-          } else {
+          } else if (partialMarkerStart !== -1) {
             visible += rest.slice(0, partialMarkerStart);
             pending = rest.slice(partialMarkerStart);
+          } else if (openTagMatch && openTagMatch.index !== undefined) {
+            visible += rest.slice(0, openTagMatch.index);
+            pending = rest.slice(openTagMatch.index);
+          } else {
+            visible += rest;
+            pending = "";
           }
 
           if (visible) { fullText += visible; setTranscription(p => p + visible); }
