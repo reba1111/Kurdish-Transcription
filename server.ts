@@ -14,6 +14,7 @@ import { transcribeLongAudio } from "./lib/chunkedTranscription";
 import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "./lib/islamicTextVerifier";
 import { searchHadithByMeaning } from "./lib/hadithSearch";
 import { correctArabicGrammar } from "./lib/arabicGrammarCorrector";
+import { correctKurdishText } from "./lib/kurdishTextCorrector";
 import { looksLikeValidWordList, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, wordsToText, type TimedWord } from "./lib/wordTimestamps";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
@@ -805,6 +806,22 @@ app.post("/api/grammar-check", async (req, res) => {
   } catch (error: any) {
     console.error("Arabic grammar correction error:", error);
     res.status(500).json({ error: error.message || "پشکنینەکە سەرکەوتوو نەبوو." });
+  }
+});
+
+// API route for Kurdish (Sorani) document spelling/typo correction with an error report.
+app.post("/api/document-correct", async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text?.trim()) return res.status(400).json({ error: "هیچ دەقێک نەنێردراوە." });
+    if (typeof text !== 'string' || text.length > 30000) return res.status(400).json({ error: "دەقەکە زۆر درێژە." });
+    if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: "GEMINI_API_KEY نەخوێندراوەتەوە." });
+
+    const result = await correctKurdishText(ai, text);
+    res.status(200).json(result);
+  } catch (error: any) {
+    console.error("Kurdish document correction error:", error);
+    res.status(500).json({ error: error.message || "ڕاستکردنەوەکە سەرکەوتوو نەبوو." });
   }
 });
 

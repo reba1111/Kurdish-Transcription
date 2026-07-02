@@ -5,7 +5,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles, Sun, Moon, Monitor, SpellCheck } from "lucide-react";
+import { Mic, Square, Upload, Copy, Check, FileAudio, Loader2, Trash2, History, Clock, ChevronDown, LogOut, User, Download, Pencil, X, Search, Share2, Sparkles, Sun, Moon, Monitor, SpellCheck, FileText } from "lucide-react";
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from "firebase/auth";
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, writeBatch, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
@@ -13,6 +13,7 @@ import AuthPage from "./AuthPage";
 import ProfilePage from "./ProfilePage";
 import { useTheme } from "./useTheme";
 import { compressAudioToMp3 } from "./audioCompress";
+import mammoth from "mammoth";
 
 // Vercel serverless functions reject any request body over 4.5MB (hard platform
 // limit, not configurable). Audio above this raw size must be compressed client-side
@@ -192,7 +193,7 @@ export default function App() {
   const [customApiUrl, setCustomApiUrl] = useState('');
   const [customApiKey, setCustomApiKey] = useState('');
   const [shouldCompress, setShouldCompress] = useState(true);
-  const [activeTab, setActiveTab] = useState<'transcribe' | 'library' | 'hadith-search' | 'arabic-grammar' | 'profile'>('transcribe');
+  const [activeTab, setActiveTab] = useState<'transcribe' | 'library' | 'hadith-search' | 'arabic-grammar' | 'document-correct' | 'profile'>('transcribe');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | 'all' | null>(null);
@@ -219,6 +220,13 @@ export default function App() {
   const [grammarResult, setGrammarResult] = useState<{ correctedText: string; errors: { original: string; corrected: string; type: string; explanation: string }[] } | null>(null);
   const [isCorrectingGrammar, setIsCorrectingGrammar] = useState(false);
   const [grammarError, setGrammarError] = useState<string | null>(null);
+  const [docFileName, setDocFileName] = useState<string | null>(null);
+  const [docInput, setDocInput] = useState('');
+  const [docResult, setDocResult] = useState<{ correctedText: string; errors: { original: string; corrected: string; explanation: string }[] } | null>(null);
+  const [isCorrectingDoc, setIsCorrectingDoc] = useState(false);
+  const [isParsingDoc, setIsParsingDoc] = useState(false);
+  const [docError, setDocError] = useState<string | null>(null);
+  const docFileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const editableRef = useRef<HTMLTextAreaElement>(null);
   const audioElRef = useRef<HTMLAudioElement>(null);
@@ -753,6 +761,69 @@ export default function App() {
     }
   };
 
+  const handleDocFileUpload = async (file: File) => {
+    setDocError(null);
+    setDocResult(null);
+    if (!/\.(docx|txt)$/i.test(file.name)) {
+      setDocError('تەنها فایلی .docx یان .txt پشتگیری دەکرێت.');
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setDocError('قەبارەی فایل زۆر گەورەیە (زۆرترین 20 مێگابایت).');
+      return;
+    }
+    setIsParsingDoc(true);
+    setDocFileName(file.name);
+    try {
+      let text: string;
+      if (/\.docx$/i.test(file.name)) {
+        const buffer = await file.arrayBuffer();
+        const { value } = await mammoth.extractRawText({ arrayBuffer: buffer });
+        text = value;
+      } else {
+        text = await file.text();
+      }
+      if (text.length > 30000) {
+        setDocError(`دەقەکە زۆر درێژە (${text.length} پیت). زۆرترین قەبارە 30,000 پیتە.`);
+        setDocInput('');
+        return;
+      }
+      if (!text.trim()) {
+        setDocError('هیچ دەقێک لە فایلەکەدا نەدۆزرایەوە.');
+        return;
+      }
+      setDocInput(text);
+    } catch {
+      setDocError('نەتوانرا فایلەکە بخوێنرێتەوە. دڵنیابەرەوە کە فایلەکە تێکنەچووە.');
+    } finally {
+      setIsParsingDoc(false);
+    }
+  };
+
+  const correctDocument = async () => {
+    if (!docInput.trim()) return;
+    setIsCorrectingDoc(true);
+    setDocError(null);
+    setDocResult(null);
+    try {
+      const res = await fetch('/api/document-correct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: docInput }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDocError(data.error || 'هەڵەیەک ڕوویدا.');
+        return;
+      }
+      setDocResult(data);
+    } catch {
+      setDocError('پەیوەندی لەگەڵ سێرڤەر نییە.');
+    } finally {
+      setIsCorrectingDoc(false);
+    }
+  };
+
   const exportText = (format: 'txt' | 'docx' | 'pdf', rawText: string) => {
     const filename = `voxscript-${Date.now()}`;
     const text = stripCitationTags(rawText);
@@ -908,12 +979,12 @@ export default function App() {
 
           {/* Desktop Nav */}
           <nav className="hidden sm:flex gap-1" dir="ltr">
-            {(['transcribe', 'library', 'hadith-search', 'arabic-grammar', 'profile'] as const).map(tab => (
+            {(['transcribe', 'library', 'hadith-search', 'arabic-grammar', 'document-correct', 'profile'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`relative px-4 py-2 text-sm font-medium transition-all rounded-lg ${activeTab === tab ? 'text-[#ff4e00]' : 'hover:bg-[#ff4e00]/05'}`}
                 style={activeTab !== tab ? { color: 'var(--text-muted)' } : undefined}
               >
-                {tab === 'transcribe' ? 'نووسینەوە' : tab === 'library' ? 'کتێبخانە' : tab === 'hadith-search' ? 'گەڕانی فەرموودە' : tab === 'arabic-grammar' ? 'ڕاستکردنەوەی عەرەبی' : 'پرۆفایل'}
+                {tab === 'transcribe' ? 'نووسینەوە' : tab === 'library' ? 'کتێبخانە' : tab === 'hadith-search' ? 'گەڕانی فەرموودە' : tab === 'arabic-grammar' ? 'ڕاستکردنەوەی عەرەبی' : tab === 'document-correct' ? 'ڕاستکردنەوەی نووسین' : 'پرۆفایل'}
                 {tab === 'library' && history.length > 0 && (
                   <span className="mr-1.5 text-[9px] px-1.5 py-0.5 rounded-full bg-[#ff4e00] text-white">{history.length}</span>
                 )}
@@ -961,7 +1032,7 @@ export default function App() {
                     <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border-soft)' }}>
                       <p className="text-[10px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>بەشەکان</p>
                       <div className="flex gap-1">
-                        {([['transcribe', Mic, 'نووسینەوە'], ['library', History, 'کتێبخانە'], ['hadith-search', Search, 'گەڕانی فەرموودە'], ['arabic-grammar', SpellCheck, 'ڕاستکردنەوەی عەرەبی'], ['profile', User, 'پرۆفایل']] as const).map(([tab, Icon, label]) => (
+                        {([['transcribe', Mic, 'نووسینەوە'], ['library', History, 'کتێبخانە'], ['hadith-search', Search, 'گەڕانی فەرموودە'], ['arabic-grammar', SpellCheck, 'ڕاستکردنەوەی عەرەبی'], ['document-correct', FileText, 'ڕاستکردنەوەی نووسین'], ['profile', User, 'پرۆفایل']] as const).map(([tab, Icon, label]) => (
                           <button key={tab} onClick={() => { setActiveTab(tab as any); setShowUserMenu(false); }}
                             className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] transition-all ${activeTab === tab ? 'bg-[#ff4e00] text-white' : 'hover:bg-[#ff4e00]/10'}`}
                             style={activeTab !== tab ? { color: 'var(--text-muted)', border: '1px solid var(--border)' } : {}}
@@ -1091,7 +1162,8 @@ export default function App() {
           ['transcribe', Mic, 'نووسینەوە'],
           ['library', History, 'کتێبخانە'],
           ['hadith-search', Search, 'گەڕان'],
-          ['arabic-grammar', SpellCheck, 'ڕاستکردنەوە'],
+          ['arabic-grammar', SpellCheck, 'عەرەبی'],
+          ['document-correct', FileText, 'نووسین'],
           ['profile', User, 'پرۆفایل'],
         ] as const).map(([tab, Icon, label]) => (
           <button key={tab} onClick={() => setActiveTab(tab as any)}
@@ -1945,6 +2017,123 @@ export default function App() {
                     <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }} dir="rtl">
                       <Check size={16} className="text-green-500 shrink-0" />
                       <p className="text-sm" style={{ color: 'var(--text-primary)' }}>هیچ هەڵەیەک نەدۆزرایەوە — دەقەکە ڕێزمانی بێخەوشە.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+            </div>
+          </motion.section>
+        ) : activeTab === 'document-correct' ? (
+          /* ── KURDISH DOCUMENT CORRECTOR ── */
+          <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="rounded-2xl shadow-2xl overflow-hidden"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+          >
+            <div className="flex items-center gap-2 px-5 sm:px-7 py-4" style={{ borderBottom: '1px solid var(--border-soft)' }}>
+              <FileText size={15} style={{ color: 'var(--text-dim)' }} />
+              <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-dim)' }}>ڕاستکردنەوەی نووسینی کوردی</span>
+            </div>
+
+            <div className="px-5 sm:px-7 py-5 space-y-3">
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                فایلی .docx یان .txt بار بکە، سیستەمەکە تەنها ئەو وشانەی تێکچوون ڕاستدەکاتەوە بەبێ ئەوەی هیچ وشەیەک زیاد یان کەم بکات یان مانا بگۆڕێت.
+              </p>
+
+              <input ref={docFileInputRef} type="file" accept=".docx,.txt" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleDocFileUpload(f); e.target.value = ''; }}
+              />
+              <button onClick={() => docFileInputRef.current?.click()} disabled={isParsingDoc}
+                className="w-full flex items-center justify-center gap-2 py-4 rounded-xl border-2 border-dashed transition-colors disabled:opacity-50"
+                style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+              >
+                {isParsingDoc ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                <span className="text-sm font-medium">{docFileName ? docFileName : 'فایلێک هەڵبژێرە یان ڕایبکێشە (.docx / .txt)'}</span>
+              </button>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[9px] uppercase tracking-widest font-bold mb-1.5" style={{ color: 'var(--text-faint)' }}>دەقی سەرەتایی</p>
+                  <textarea
+                    value={docInput}
+                    onChange={e => setDocInput(e.target.value)}
+                    placeholder="دەقی کوردی لێرە دەردەکەوێت دوای بارکردنی فایل، یان دەتوانیت ڕاستەوخۆ بینووسیت..."
+                    dir="rtl"
+                    rows={8}
+                    className="w-full rounded-xl px-4 py-3 text-base leading-relaxed outline-none transition-colors resize-none"
+                    style={{ background: 'var(--bg-input)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-[9px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-faint)' }}>دەقی ڕاستکراوە</p>
+                    {docResult && (
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => exportText('docx', docResult.correctedText)}
+                          title="داگرتنی دەقی ڕاستکراوە وەک .docx"
+                          className="shrink-0 p-1 rounded-md bg-card border border-[#ffffff10] hover:bg-[#222] transition-colors"
+                        >
+                          <Download size={12} style={{ color: 'var(--text-muted)' }} />
+                        </button>
+                        <button onClick={() => copyText(docResult.correctedText, 'doc-corrected')}
+                          title="کۆپیکردنی دەقی ڕاستکراوە"
+                          className="shrink-0 p-1 rounded-md bg-card border border-[#ffffff10] hover:bg-[#222] transition-colors"
+                        >
+                          {copiedId === 'doc-corrected' ? <Check size={12} className="text-green-400" /> : <Copy size={12} style={{ color: 'var(--text-muted)' }} />}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div dir="rtl"
+                    className="w-full rounded-xl px-4 py-3 text-base leading-relaxed overflow-auto select-text"
+                    style={{ minHeight: 'calc(8 * 1.625em + 1.5rem)', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: 'var(--text-primary)' }}
+                  >
+                    {docResult ? (
+                      buildGrammarDiffSegments(docResult.correctedText, docResult.errors).map((seg, i) =>
+                        seg.changed
+                          ? <span key={i} className="text-green-500 font-semibold bg-green-500/10 rounded px-0.5">{seg.text}</span>
+                          : <span key={i}>{seg.text}</span>
+                      )
+                    ) : (
+                      <span style={{ color: 'var(--text-faint)' }}>دەقی ڕاستکراوە لێرە دەردەکەوێت...</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <button onClick={correctDocument} disabled={isCorrectingDoc || !docInput.trim()}
+                className="w-full py-3 rounded-xl bg-[#ff4e00] text-white font-bold text-xs tracking-[0.08em] shadow-[0_0_20px_rgba(255,78,0,0.25)] hover:shadow-[0_0_30px_rgba(255,78,0,0.4)] hover:bg-[#e64600] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isCorrectingDoc ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+                ڕاستکردنەوە
+              </button>
+
+              {docError && (
+                <p className="text-xs text-red-500">{docError}</p>
+              )}
+
+              {docResult && (
+                <div className="space-y-3 pt-2">
+                  {docResult.errors.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-[9px] uppercase tracking-widest font-bold px-1" style={{ color: 'var(--text-faint)' }}>
+                        ڕاپۆرتی وشە ڕاستکراوەکان ({docResult.errors.length})
+                      </p>
+                      {docResult.errors.map((err, i) => (
+                        <div key={i} className="rounded-xl px-4 py-3" dir="rtl" style={{ background: 'rgba(255,78,0,0.05)', border: '1px solid rgba(255,78,0,0.18)' }}>
+                          <div className="flex items-center gap-2 text-base mb-1.5">
+                            <span className="text-red-400 line-through">{err.original}</span>
+                            <span style={{ color: 'var(--text-faint)' }}>←</span>
+                            <span className="text-green-500 font-semibold">{err.corrected}</span>
+                          </div>
+                          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>{err.explanation}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 px-4 py-3 rounded-xl" style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }} dir="rtl">
+                      <Check size={16} className="text-green-500 shrink-0" />
+                      <p className="text-sm" style={{ color: 'var(--text-primary)' }}>هیچ وشەیەکی هەڵە نەدۆزرایەوە — دەقەکە بێخەوشە.</p>
                     </div>
                   )}
                 </div>
