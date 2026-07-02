@@ -232,6 +232,13 @@ Rules:
     const tempInputPath = path.join(os.tmpdir(), crypto.randomBytes(16).toString("hex") + ".mp3");
     fs.writeFileSync(tempInputPath, finalBuffer);
 
+    // Save the original buffer/mime before trimming so word-timestamp calls can use
+    // the untrimmed audio — Gemini reports timestamps relative to what it hears, and
+    // the browser plays the original file, so feeding trimmed audio for timestamps
+    // would produce offsets that don't match playback.
+    const originalBuffer = finalBuffer;
+    const originalMimeType = finalMimeType;
+
     // Both Gemini and ElevenLabs bill audio by duration, so long dead-air stretches
     // (common in lectures/meetings) cost real money for nothing. Cut them out before
     // any model sees the file. trimSilence fails open (returns tempInputPath
@@ -281,26 +288,37 @@ Rules:
     try { fs.unlinkSync(tempInputPath); } catch {}
     if (speechSegments) { try { fs.unlinkSync(effectiveInputPath); } catch {} }
 
+    // Transcript audio: trimmed (silence removed) to save API cost.
     const audioPart = {
       inlineData: {
         mimeType: finalMimeType,
         data: finalBuffer.toString("base64"),
       },
     };
+    // Timestamp audio: always the original untrimmed file so Gemini's reported
+    // offsets match what the browser is actually playing back.
+    const audioPartOriginal = {
+      inlineData: {
+        mimeType: originalMimeType,
+        data: originalBuffer.toString("base64"),
+      },
+    };
 
     let lastError: any = null;
 
     if (targetLanguage === 'ku') {
-      // Single audio call returns word+timestamp lines, which double as both the
-      // transcript (joined into prose) and the karaoke/subtitle word list — instead
-      // of a separate /api/transcribe-timed audio call that doubled the cost of every
-      // transcription. Citation tagging happens in a cheap text-only follow-up pass
-      // (tagIslamicCitations) rather than being baked into this audio prompt, keeping
-      // the audio prompt simple and the JSON/line output more reliable.
+      // Two-pass strategy when silence was trimmed:
+      //   Pass 1 (transcript): use trimmed audio — saves API cost, no silence to transcribe.
+      //   Pass 2 (timestamps): use ORIGINAL audio — Gemini timestamps must match the file
+      //     the browser plays; trimmed offsets don't map cleanly even with remapping.
+      // When no trimming occurred both passes use the same audio part.
+      const timestampAudioPart = speechSegments ? audioPartOriginal : audioPart;
+
       let words: TimedWord[] = [];
       let text = "";
       let usedModel = "";
 
+      // Pass 1: transcript from trimmed audio (word-timestamp format for text extraction)
       for (const modelName of models) {
         try {
           const result = await ai.models.generateContent({
@@ -310,7 +328,6 @@ Rules:
           });
           const parsed = parseWordTimestampLines(result.text || "");
           if (looksLikeValidWordList(parsed, durationSeconds)) {
-            words = parsed;
             text = wordsToText(parsed);
             usedModel = modelName;
             break;
@@ -326,8 +343,41 @@ Rules:
         }
       }
 
-      // Every model's word-timestamp attempt was unusable — fall back to the plain-
-      // prose prompt so we still return a working transcript, just without timestamps.
+      // Pass 2: word timestamps from ORIGINAL (untrimmed) audio for accurate karaoke sync
+      if (text && speechSegments) {
+        try {
+          const tsResult = await ai.models.generateContent({
+            model: usedModel || models[0],
+            config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
+            contents: [{ parts: [timestampAudioPart, { text: promptText }] }],
+          });
+          const tsWords = parseWordTimestampLines(tsResult.text || "");
+          const originalDuration = trimResult.durationSeconds + (speechSegments.reduce((s, seg) => s + (seg.origEnd - seg.origStart - (seg.trimmedEnd - seg.trimmedStart)), 0));
+          if (looksLikeValidWordList(tsWords, originalDuration)) {
+            words = tsWords;
+          }
+        } catch (e) {
+          console.warn("[Transcribe] Timestamp re-run on original audio failed, skipping karaoke:", e);
+        }
+      } else if (text && !speechSegments) {
+        // No trim — reuse parse from pass 1 directly
+        for (const modelName of models) {
+          try {
+            const result = await ai.models.generateContent({
+              model: modelName,
+              config: { temperature: 0, systemInstruction: ISLAMIC_TEXT_SYSTEM_INSTRUCTION },
+              contents: [{ parts: [audioPart, { text: promptText }] }],
+            });
+            const parsed = parseWordTimestampLines(result.text || "");
+            if (looksLikeValidWordList(parsed, durationSeconds)) {
+              words = parsed;
+              break;
+            }
+          } catch { break; }
+        }
+      }
+
+      // Fallback prose transcript if word-timestamp pass failed
       if (!text) {
         try {
           const result = await ai.models.generateContent({
@@ -344,8 +394,6 @@ Rules:
       let taggedText = await tagIslamicCitations(ai, text);
 
       if (wantsProUpgrade && usedModel && usedModel !== "gemini-2.5-pro" && /<quran |<hadith /.test(taggedText)) {
-        // Flash found religious content — re-run this audio through Pro for a more
-        // reliable transcription/citation of it before we spend time verifying.
         try {
           const proResult = await ai.models.generateContent({
             model: "gemini-2.5-pro",
@@ -354,7 +402,6 @@ Rules:
           });
           const proWords = parseWordTimestampLines(proResult.text || "");
           if (looksLikeValidWordList(proWords, durationSeconds)) {
-            words = proWords;
             text = wordsToText(proWords);
             taggedText = await tagIslamicCitations(ai, text);
           }
@@ -370,8 +417,7 @@ Rules:
       }
       const annotated = await verifyAndAnnotate(taggedText, ai);
       if (words.length > 0) {
-        const originalTimeWords = speechSegments ? remapWordsToOriginalTime(words, speechSegments) : words;
-        res.write(formatWordsMarker(originalTimeWords));
+        res.write(formatWordsMarker(words));
       }
       res.end(annotated);
       return;
