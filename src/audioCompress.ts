@@ -57,7 +57,11 @@ function resampleLinear(input: Float32Array, fromRate: number, toRate: number): 
  */
 export async function compressAudioToMp3(input: Blob): Promise<Blob> {
   const arrayBuffer = await input.arrayBuffer();
+  // Mobile browsers often start AudioContext in a suspended state; resume before decoding.
   const audioCtx = new AudioContext();
+  if (audioCtx.state === 'suspended') {
+    try { await audioCtx.resume(); } catch { /* best-effort */ }
+  }
   let decoded: AudioBuffer;
   try {
     decoded = await audioCtx.decodeAudioData(arrayBuffer);
