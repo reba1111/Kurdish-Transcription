@@ -2,14 +2,10 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { GoogleGenAI } from "@google/genai";
 import formidable from "formidable";
 import fs from "fs";
-import ffmpeg from "fluent-ffmpeg";
-import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker, trimSilence } from "../lib/audioChunker";
+import { CHUNK_THRESHOLD_SECONDS, formatChunkProgressMarker, formatVerifyingSourcesMarker, formatWordsMarker } from "../lib/audioChunker";
 import { transcribeLongAudio } from "../lib/chunkedTranscription";
 import { ISLAMIC_TEXT_DETECTION_RULE, ISLAMIC_TEXT_SYSTEM_INSTRUCTION, tagIslamicCitations, verifyAndAnnotate } from "../lib/islamicTextVerifier";
-import { looksLikeValidWordList, parseWordTimestampJSON, parseWordTimestampLines, remapWordsToOriginalTime, WORD_TIMESTAMP_PROMPT, WORD_TIMESTAMP_PROMPT_JSON, WORD_TIMESTAMP_SCHEMA, wordsToText, type TimedWord } from "../lib/wordTimestamps";
-
-ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+import { looksLikeValidWordList, parseWordTimestampJSON, parseWordTimestampLines, WORD_TIMESTAMP_PROMPT, WORD_TIMESTAMP_PROMPT_JSON, WORD_TIMESTAMP_SCHEMA, wordsToText, type TimedWord } from "../lib/wordTimestamps";
 
 export const config = {
   api: {
@@ -62,21 +58,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (mimeType === "video/webm") mimeType = "audio/webm";
     if (mimeType === "video/mp4") mimeType = "audio/mp4";
 
-    // Both Gemini and ElevenLabs bill audio by duration, so long dead-air stretches
-    // (common in lectures/meetings) cost real money for nothing. Cut them out before
-    // any model sees the file — every downstream path uses this effective file/buffer/
-    // mimeType instead of the raw upload. trimSilence fails open (returns the original
-    // file untouched) on any detection/encode error.
-    // Keep the original buffer before trimming so word-timestamp calls can use
-    // the untrimmed audio — Gemini timestamps must match what the browser plays.
+    // trimSilence relies on ffmpeg which is not available in Vercel serverless
+    // functions (no binary execution). Skip it entirely — use the raw upload directly.
     const originalBuffer = fs.readFileSync(audioFile.filepath);
     const originalMimeType = mimeType;
-
-    const trimResult = await trimSilence(audioFile.filepath);
-    const effectiveFilePath = trimResult.filePath;
-    const speechSegments = trimResult.segments;
-    const fileBuffer = fs.readFileSync(effectiveFilePath);
-    if (speechSegments) mimeType = "audio/mpeg"; // trimSilence always re-encodes to mp3
+    const fileBuffer = originalBuffer;
+    const effectiveFilePath = audioFile.filepath;
+    const speechSegments = null;
+    const trimResult = { filePath: audioFile.filepath, segments: null, durationSeconds: 0 };
 
     try {
     // SCRIBE PATH
@@ -201,10 +190,11 @@ Strict rules — follow every one without exception:
       ? ["gemini-2.5-flash"]
       : ["gemini-2.5-flash"];
 
-    // Long files get split into overlapping 5-minute chunks so each Gemini
-    // request stays fast and reliable; short files keep single-shot streaming.
-    // Duration already came from trimSilence's own probe — no need to re-probe here.
-    const durationSeconds = trimResult.durationSeconds;
+    // Vercel serverless has no ffmpeg so chunking is not available here.
+    // The client-side compression cap (4.5 MB @ 16 kbps ≈ ~37 min) means any
+    // file that reaches this handler fits in a single Gemini request anyway.
+    // Force durationSeconds to 0 so the chunk path is never entered.
+    const durationSeconds = 0;
 
     if (durationSeconds > CHUNK_THRESHOLD_SECONDS) {
       try {
