@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
@@ -20,6 +22,13 @@ export default function AuthPage() {
     setError(null);
     setLoading(true);
     try {
+      // On mobile browsers popup is often blocked; use redirect instead.
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      if (isMobile) {
+        await signInWithRedirect(auth, googleProvider);
+        // Page will reload; getRedirectResult() in useEffect handles the result.
+        return;
+      }
       await signInWithPopup(auth, googleProvider);
     } catch {
       setError("Google login شکستی هێنا. دووبارە هەوڵ بدەرەوە.");
@@ -27,6 +36,11 @@ export default function AuthPage() {
       setLoading(false);
     }
   };
+
+  // Handle the redirect result when the user returns from Google sign-in on mobile.
+  useEffect(() => {
+    getRedirectResult(auth).catch(() => {});
+  }, []);
 
   const handleEmail = async (e: React.FormEvent) => {
     e.preventDefault();
