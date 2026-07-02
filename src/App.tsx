@@ -333,12 +333,17 @@ export default function App() {
     try {
       setError(null);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+      // Pick a MIME type the browser actually supports; falling back to the default
+      // avoids blobs whose .type mismatches the real encoded format (breaks decoding on iOS).
+      const preferredTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+      const mimeType = preferredTypes.find(t => MediaRecorder.isTypeSupported(t)) || '';
+      const mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
       mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       mediaRecorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: "audio/wav" });
+        const actualMime = mediaRecorder.mimeType || mimeType || 'audio/webm';
+        const blob = new Blob(audioChunksRef.current, { type: actualMime });
         setAudioBlob(blob);
         setAudioUrl(URL.createObjectURL(blob));
         stream.getTracks().forEach(t => t.stop());
@@ -398,14 +403,17 @@ export default function App() {
         setProcessStage('compressing');
         try {
           uploadBlob = await compressAudioToMp3(blob);
-        } catch {
-          // Decoding/encoding failed — fall back to the original blob. If it's over
-          // the limit the upload will fail with a clear 413 below rather than silently.
+        } catch (compErr) {
+          console.warn('[compress] failed, using original blob:', compErr);
           uploadBlob = blob;
         }
       }
       if (uploadBlob.size > VERCEL_BODY_SIZE_LIMIT) {
-        setError("دەنگەکە تەنانەت دوای بچووککردنەوەش زۆر گەورەیە. تکایە کورتکراوەیەکی کەمتری دەنگەکە باربکە.");
+        setError(
+          needsCompression
+            ? "بچووككردنەوەی دەنگ لە موبایلەکەت کار نەکرد و فایلەکە زۆر گەورەیە (زیاتر لە 4.5MB). تکایە فایلێکی کەمتر باربکە یان لە لاپتۆپ تۆمار بکە."
+            : "دەنگەکە زۆر گەورەیە. تکایە گزینەی «بچووككردنەوەی قەبارە» چالاک بکە یان فایلێکی کەمتر باربکە."
+        );
         return;
       }
 
